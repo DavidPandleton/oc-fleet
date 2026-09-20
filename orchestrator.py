@@ -297,6 +297,10 @@ class Orchestrator:
             )
             return
         if rec["attempts"] <= task.retries:
+            # Cancel before retrying. Without this the abandoned session keeps
+            # holding a fleet slot and keeps writing to the workdir while the
+            # retry writes to the same place, so "retry" would mean "two runs".
+            self._cancel_session(rec.get("session_id"), tid)
             rec["status"] = "pending"
             pending.insert(self._task_order.index(tid), tid)
             print("retrying: %s (attempt %d of %d)" % (tid, rec["attempts"] + 1, task.retries + 1))
@@ -313,6 +317,26 @@ class Orchestrator:
                 )
         else:
             print("failed: %s (outcome %s)" % (tid, outcome))
+
+    def _cancel_session(self, session_id, tid):
+        """Best-effort cancel of a session we are about to abandon.
+
+        Never raises and never blocks the run: a session that already finished
+        will simply refuse the interrupt. Fleet objects that do not implement
+        cancel (test doubles) are tolerated.
+        """
+        if not session_id:
+            return
+        cancel = getattr(self.fleet, "cancel", None)
+        if cancel is None:
+            return
+        try:
+            stopped = cancel(session_id)
+        except Exception as exc:  # noqa: BLE001 - cancel must not break the run
+            print("warning: could not cancel session %s (%s): %s" % (tid, session_id, exc))
+            return
+        if stopped:
+            print("stopped: %s (session %s cancelled)" % (tid, session_id))
 
     # -- reporting --------------------------------------------------------------
 

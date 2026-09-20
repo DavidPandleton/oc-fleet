@@ -530,5 +530,40 @@ class DispatchConfigTestCase(unittest.TestCase):
         self.assertIs(orch._fleet, orch.fleet)
 
 
+class SelfLoopTestCase(unittest.TestCase):
+    """A task depending on itself must never reach the executor.
+
+    Found by cross-model review: the suite covered 2-node and 3-node cycles but
+    not the self-edge, so a regression limited to that case would have passed
+    CI. The add() guard and the DFS both need to keep catching it.
+    """
+
+    def test_self_dependency_rejected_at_add(self):
+        orch = Orchestrator()
+        with self.assertRaises(ValueError) as ctx:
+            orch.add(Task(id="a", prompt="x", depends_on=["a"]))
+        self.assertIn("unknown task", str(ctx.exception))
+
+    def test_self_loop_introduced_by_mutation_is_caught(self):
+        """Post-add mutation is the only way to build a self-edge."""
+        orch = Orchestrator()
+        orch.add(Task(id="a", prompt="x"))
+        orch._tasks["a"].depends_on = ["a"]
+        with self.assertRaises(ValueError) as ctx:
+            orch.validate()
+        self.assertIn("cycle", str(ctx.exception))
+
+    def test_cycle_on_an_otherwise_isolated_node_is_caught(self):
+        """A cycle unreachable from any root must still be detected."""
+        orch = Orchestrator()
+        orch.add(Task(id="x", prompt="x"))
+        orch.add(Task(id="p", prompt="x"))
+        orch.add(Task(id="q", prompt="x", depends_on=["p"]))
+        orch._tasks["p"].depends_on = ["q"]
+        with self.assertRaises(ValueError) as ctx:
+            orch.validate()
+        self.assertIn("cycle", str(ctx.exception))
+
+
 if __name__ == "__main__":
     unittest.main()

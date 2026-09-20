@@ -118,6 +118,34 @@ class Fleet:
                 last_text = assistant_text
         return {"outcome": outcome, "last_assistant_text": last_text}
 
+    def cancel(self, session_id):
+        """Stop a running session. Returns True when the server confirms.
+
+        `POST /api/session/{id}/interrupt` sets the session's outcome to
+        "interrupted" and stops the model mid-turn (verified against a live
+        server: a session told to count slowly stopped after one shell call).
+
+        Why this exists: the orchestrator previously abandoned a timed-out
+        session and immediately retried. The old session kept consuming a fleet
+        slot and kept writing to the shared workdir while the retry wrote to the
+        same files, so a timeout could produce two concurrent writers rather
+        than one retry. Cancelling first is what makes "retry" mean "retry".
+
+        A cancel that fails must never crash the run: the session may have
+        finished on its own between the poll and the cancel, in which case the
+        server rejects the interrupt and that is fine.
+        """
+        if not session_id:
+            return False
+        try:
+            response = self._request("POST", f"/api/session/{session_id}/interrupt")
+        except Exception:  # noqa: BLE001 - cancel is best-effort by design
+            return False
+        payload = self._unwrap(response)
+        if isinstance(payload, dict):
+            return bool(payload.get("interrupted"))
+        return bool(payload)
+
     def list_sessions(self, limit=10):
         """Return a list of session dicts, newest first."""
         response = self._request("GET", f"/api/session?limit={limit}&order=desc")

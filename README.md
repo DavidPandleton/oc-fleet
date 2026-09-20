@@ -40,6 +40,22 @@ terkontrol. Yang dilaporin: fluff yang nggak ngefek (chain-of-thought,
 urgency, role), scope tak terbatas, output yang nggak bisa diverifikasi,
 em-dash, dan destructive verb tanpa preservation constraint.
 
+Sejak eksperimen delegasi (2026-09-21) ada empat aturan tambahan yang nyasar
+celah spec, karena itu mode kegagalan agent yang sebenarnya: dia ngisi celah
+dengan aturan karangan sendiri yang kedengeran masuk akal.
+
+| Rule | Yang ditangkep |
+|---|---|
+| `SPEC-UNDEFINED-EDGE` | enumerasi terbuka (`etc`, `and so on`) yang ngundang case karangan |
+| `SPEC-TEST-ONLY-VALID` | "verify the examples above" cuma ngecek happy path |
+| `SPEC-NO-INVALID-CONTRACT` | prompt implementasi tanpa nyebut kelakuan input invalid |
+| `SPEC-VERIFY-SELF-REFERENTIAL` | verifikasi mandiri, bukan bukti independen |
+
+Contoh nyata kenapa ini penting: T1 minta parser durasi, nyebut bentuk validnya,
+tapi nggak bilang `"1h1h"` harus apa. Agent ngarang aturan "unit harus urut
+menurun", nolak input legal, dan verifikasinya SENDIRI lulus karena dia nulis
+tesnya dari asumsinya sendiri. Detail: `~/kb/projects/LAPORAN_FINAL.md`.
+
 ## Orchestrator
 
 ```python
@@ -72,7 +88,7 @@ st = f.status(sid)  # {outcome, last_assistant_text}
 - `orchestrator.py`: DAG runner dengan retry dan parallel branch
 - `prompt_lint.py`: linter prompt berbasis pengukuran
 - `web/dashboard.py`: dashboard stdlib, single file
-- `oc-fleet-wait.py`: detached waiter per session (124 tests total)
+- `oc-fleet-wait.py`: detached waiter per session (169 tests total)
 
 Requires `opencode serve` running. Password dicari berurutan: env
 `OPENCODE_SERVER_PASSWORD`, `/tmp/oc_serve.log`,

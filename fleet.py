@@ -20,7 +20,7 @@ class Fleet:
 
     def __init__(self, base_url="http://127.0.0.1:4096", password_file="/tmp/oc_serve.log"):
         self.base_url = base_url.rstrip("/")
-        self.headers = {}
+        self.headers = {"Content-Type": "application/json"}
         try:
             with open(password_file, encoding="utf-8") as fh:
                 content = fh.read()
@@ -31,7 +31,7 @@ class Fleet:
                     "Basic " + base64.b64encode(f"opencode:{password}".encode()).decode()
                 )
         except OSError:
-            self.headers = {}
+            self.headers = {"Content-Type": "application/json"}
 
     @staticmethod
     def sanitize(text):

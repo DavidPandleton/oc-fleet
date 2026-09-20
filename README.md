@@ -11,7 +11,50 @@ python3 cli.py sessions 5               # 5 session terakhir
 python3 cli.py dispatch "TASK" --workdir /path/to/repo
 python3 cli.py show ses_xxx             # outcome + reply
 python3 cli.py watch                    # live completions
+python3 web/dashboard.py                # web dashboard di :8787
+python3 prompt_lint.py "TASK"           # cek prompt sebelum dispatch
 ```
+
+## Web dashboard
+
+```bash
+python3 web/dashboard.py --port 8787
+```
+
+Stdlib only, no npm, no flask. Buka `http://127.0.0.1:8787`:
+
+- stats header (sessions, tool calls, success rate)
+- tabel session terbaru, refresh tiap 5 detik
+- live completions via SSE stream
+- form dispatch langsung dari browser
+
+## Prompt linter
+
+```bash
+python3 prompt_lint.py "Think step by step. Improve everything."
+python3 prompt_lint.py --file task.txt
+```
+
+Ngecek prompt terhadap perilaku harness yang udah diukur lewat 16 probe
+terkontrol. Yang dilaporin: fluff yang nggak ngefek (chain-of-thought,
+urgency, role), scope tak terbatas, output yang nggak bisa diverifikasi,
+em-dash, dan destructive verb tanpa preservation constraint.
+
+## Orchestrator
+
+```python
+from orchestrator import Orchestrator, Task
+
+o = Orchestrator(max_parallel=4)
+o.add(Task(id="a", prompt="Scaffold module", workdir="/repo"))
+o.add(Task(id="b", prompt="Write tests", workdir="/repo", depends_on=["a"]))
+o.add(Task(id="c", prompt="Update docs", workdir="/repo", depends_on=["a"], retries=2))
+o.run()
+print(o.summary())
+```
+
+DAG topologis, branch independen jalan paralel, retry per task, dependent
+dari task gagal di-skip tanpa bunuh branch lain.
 
 ## Library
 
@@ -24,11 +67,16 @@ st = f.status(sid)  # {outcome, last_assistant_text}
 
 ## Architecture
 
-- `fleet.py`: core lib (17 tests)
-- `cli.py`: argparse CLI (25 tests)
-- `oc-fleet-wait.py`: detached waiter per session
+- `fleet.py`: core lib
+- `cli.py`: argparse CLI
+- `orchestrator.py`: DAG runner dengan retry dan parallel branch
+- `prompt_lint.py`: linter prompt berbasis pengukuran
+- `web/dashboard.py`: dashboard stdlib, single file
+- `oc-fleet-wait.py`: detached waiter per session (124 tests total)
 
-Requires `opencode serve` running (reads password from /tmp/oc_serve.log).
+Requires `opencode serve` running. Password dicari berurutan: env
+`OPENCODE_SERVER_PASSWORD`, `/tmp/oc_serve.log`,
+`~/.local/share/opencode/serve.log`, lalu `~/.config/opencode/service.json`.
 
 - Rouge
 

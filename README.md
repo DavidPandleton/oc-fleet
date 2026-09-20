@@ -31,3 +31,24 @@ st = f.status(sid)  # {outcome, last_assistant_text}
 Requires `opencode serve` running (reads password from /tmp/oc_serve.log).
 
 - Rouge
+
+## Performance notes
+
+Built and debugged entirely through OpenCode's HTTP API (130 sessions,
+596 tool calls, 97.3% success rate). The tool itself exists because
+driving N agents in parallel from a shell gets unmanageable fast.
+
+Key API quirks encoded in `fleet.py` (all discovered by probing the live
+server, not from docs):
+
+- Response envelopes are inconsistent: `/api/session` returns
+  `{"data": [...]}` but `/api/project` returns a bare list. Both shapes
+  are handled.
+- `Content-Type: application/json` is mandatory or every POST returns 415.
+- Auth is HTTP Basic (`opencode:<password>`), not Bearer.
+- Completion is signalled by the SSE event `session.execution.succeeded`,
+  not by an `idle` message.
+
+## License
+
+MIT

@@ -36,7 +36,8 @@ class FleetTestCase(unittest.TestCase):
 
     def test_auth_header_absent_without_password_file(self):
         fleet = Fleet(base_url="http://127.0.0.1:4096", password_file="/nonexistent")
-        self.assertEqual(fleet.headers, {})
+        self.assertNotIn("Authorization", fleet.headers)
+        self.assertEqual(fleet.headers.get("Content-Type"), "application/json")
 
     @mock.patch("urllib.request.urlopen")
     def test_dispatch_returns_session_id(self, urlopen):

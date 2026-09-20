@@ -50,21 +50,37 @@ class Fleet:
             return None
         return json.loads(body)
 
+    @staticmethod
+    def _unwrap(payload):
+        """Unwrap a {'data': ...} response envelope when present, else return as-is."""
+        if isinstance(payload, dict) and "data" in payload:
+            return payload["data"]
+        return payload
+
     def dispatch(self, task, workdir, title="", model=""):
         """Create a session, post the task prompt, and return its session id."""
-        session = self._request("POST", "/api/session", {"title": title, "model": model, "workdir": workdir})
+        body = {"title": title, "location": {"directory": workdir}}
+        if model:
+            provider, _, model_id = model.partition("/")
+            if _ and model_id:
+                body["model"] = {"providerID": provider, "id": model_id}
+        session = self._request("POST", "/api/session", body)
+        session = self._unwrap(session) or {}
         session_id = session["id"]
-        self._request("POST", f"/api/session/{session_id}/prompt", {"prompt": task})
+        self._request("POST", f"/api/session/{session_id}/prompt", {"text": task})
         return session_id
 
     def status(self, session_id):
         """Return the outcome and last assistant text for a session."""
-        messages = self._request("GET", f"/api/session/{session_id}/message")
+        response = self._request("GET", f"/api/session/{session_id}/message")
+        messages = self._unwrap(response)
+        if not isinstance(messages, list):
+            messages = []
         outcome = None
         last_text = None
         for message in messages:
-            if message.get("type") == "idle" and message.get("result"):
-                outcome = message["result"]
+            if message.get("type") == "idle" and message.get("outcome"):
+                outcome = message["outcome"]
             assistant_text = self._assistant_text(message)
             if assistant_text is not None:
                 last_text = assistant_text
@@ -72,7 +88,8 @@ class Fleet:
 
     def list_sessions(self, limit=10):
         """Return a list of session dicts, newest first."""
-        sessions = self._request("GET", f"/api/session?limit={limit}&order=desc")
+        response = self._request("GET", f"/api/session?limit={limit}&order=desc")
+        sessions = self._unwrap(response)
         return sessions if isinstance(sessions, list) else []
 
     def stats(self):

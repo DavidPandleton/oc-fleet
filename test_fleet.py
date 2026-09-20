@@ -2,10 +2,12 @@
 
 import base64
 import json
+import os
 import tempfile
 import unittest
 from unittest import mock
 
+import fleet
 from fleet import Fleet
 
 
@@ -35,9 +37,13 @@ class FleetTestCase(unittest.TestCase):
         self.assertEqual(fleet.headers["Authorization"], expected)
 
     def test_auth_header_absent_without_password_file(self):
-        fleet = Fleet(base_url="http://127.0.0.1:4096", password_file="/nonexistent")
-        self.assertNotIn("Authorization", fleet.headers)
-        self.assertEqual(fleet.headers.get("Content-Type"), "application/json")
+        with mock.patch.dict(os.environ, {}, clear=True), mock.patch.object(
+            fleet, "_PASSWORD_SOURCES", ["/nonexistent"]
+        ):
+            with mock.patch.object(fleet, "_SERVICE_CONFIG", "/nonexistent.json"):
+                f = Fleet(base_url="http://127.0.0.1:4096", password_file="/nonexistent")
+        self.assertNotIn("Authorization", f.headers)
+        self.assertEqual(f.headers.get("Content-Type"), "application/json")
 
     @mock.patch("urllib.request.urlopen")
     def test_dispatch_returns_session_id(self, urlopen):

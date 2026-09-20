@@ -151,7 +151,10 @@ class AuthHeadersTest(unittest.TestCase):
         self.assertEqual(headers["Authorization"], expected)
 
     def test_headers_missing_file(self):
-        headers = dash.load_auth_headers("/nonexistent/path/log")
+        with mock.patch.dict(os.environ, {}, clear=True), mock.patch.object(
+            dash, "_PASSWORD_SOURCES", ["/nonexistent/path/log"]
+        ), mock.patch.object(dash, "_SERVICE_CONFIG", "/nonexistent.json"):
+            headers = dash.load_auth_headers("/nonexistent/path/log")
         self.assertNotIn("Authorization", headers)
         self.assertEqual(headers["Content-Type"], "application/json")
 

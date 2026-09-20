@@ -34,6 +34,15 @@ DEFAULT_PORT = 8787
 SSE_READ_CHUNK = 65536
 
 _PASSWORD_RE = re.compile(r"server password\s+(\S+)")
+
+# Extra places to look for the password when no explicit file works.
+# The serve log lives in /tmp and can be wiped, so the second entry is
+# the durable copy and service.json is the final fallback.
+_PASSWORD_SOURCES = [
+    "/tmp/oc_serve.log",
+    os.path.expanduser("~/.local/share/opencode/serve.log"),
+]
+_SERVICE_CONFIG = os.path.expanduser("~/.config/opencode/service.json")
 MODELS = [
     "",
     "cutad/qwen3-8-flash-next",
@@ -43,7 +52,7 @@ MODELS = [
 ]
 
 
-def load_auth_headers(password_file):
+def load_auth_headers(password_file=None):
     """Read the OpenCode server password and return request headers.
 
     Mirrors the password loader in fleet.Fleet: Basic opencode:<password>.
@@ -51,14 +60,34 @@ def load_auth_headers(password_file):
     Authorization header.
     """
     headers = {"Content-Type": "application/json"}
-    try:
-        with open(password_file, encoding="utf-8") as fh:
-            content = fh.read()
-    except OSError:
-        return headers
-    match = _PASSWORD_RE.search(content)
-    if match:
-        password = match.group(1)
+    password = None
+
+    env_pw = os.environ.get("OPENCODE_SERVER_PASSWORD")
+    if env_pw:
+        password = env_pw
+    else:
+        candidates = [password_file] if password_file else []
+        candidates += _PASSWORD_SOURCES
+        for cand in candidates:
+            if not cand:
+                continue
+            try:
+                with open(cand, encoding="utf-8") as fh:
+                    content = fh.read()
+            except OSError:
+                continue
+            match = _PASSWORD_RE.search(content)
+            if match:
+                password = match.group(1)
+                break
+        if not password:
+            try:
+                with open(_SERVICE_CONFIG, encoding="utf-8") as fh:
+                    password = json.load(fh).get("password")
+            except (OSError, ValueError):
+                password = None
+
+    if password:
         headers["Authorization"] = (
             "Basic " + base64.b64encode(("opencode:" + password).encode()).decode()
         )
@@ -376,7 +405,10 @@ function esc(text) {
 }
 
 function sessionTime(session) {
-  var t = session.time || session.created || session.updated;
+  // The API returns time as an object: {created, updated, idle}.
+  var t = session.time;
+  if (t && typeof t === "object") { t = t.updated ?? t.created ?? t.idle; }
+  if (t === undefined || t === null) { t = session.created ?? session.updated; }
   if (!t) { return "-"; }
   var ms = Number(t);
   if (!isFinite(ms) || ms <= 0) { return String(t); }
@@ -415,11 +447,26 @@ async function refresh() {
 
 async function refreshStats() {
   try {
-    var res = await fetch("/api/experimental/session/stats");
-    var st = await res.json();
-    el("st-sessions").textContent = fmt(st.session_count ?? st.sessions ?? st.total ?? "-");
-    el("st-tools").textContent = fmt(st.tool_calls ?? st.tools ?? st.toolCalls ?? "-");
-    var rate = st.success_rate ?? st.successRate ?? st.rate;
+    var res = await fetch("/api/stats");
+    var raw = await res.json();
+    var st = raw.data ?? raw;
+    el("st-sessions").textContent = fmt(st.sessions ?? st.session_count ?? st.total ?? "-");
+    // tools is an object: {mode, totals: {calls, succeeded, failed, unfinished}}
+    var tools = st.tools;
+    var calls = "-";
+    var rate = "-";
+    if (tools && typeof tools === "object" && tools.totals) {
+      var t = tools.totals;
+      calls = fmt(t.calls ?? "-");
+      var done = Number(t.succeeded ?? 0) + Number(t.failed ?? 0);
+      rate = done > 0 ? (Number(t.succeeded) / done * 100).toFixed(1) + "%" : "-";
+    } else if (typeof tools === "number") {
+      calls = fmt(tools);
+    }
+    el("st-tools").textContent = calls;
+    if (rate === "-") {
+      rate = st.success_rate ?? st.successRate ?? st.rate ?? "-";
+    }
     el("st-rate").textContent = fmt(rate);
   } catch (err) {
     el("st-sessions").textContent = "-";
@@ -540,7 +587,7 @@ class DashboardHandler(BaseHTTPRequestHandler):
             self._handle_sessions()
         elif self.path == "/api/events":
             self._handle_events()
-        elif self.path == "/api/experimental/session/stats":
+        elif self.path in ("/api/stats", "/api/experimental/session/stats"):
             self._handle_stats()
         else:
             self._send_json(404, {"error": "not found"})

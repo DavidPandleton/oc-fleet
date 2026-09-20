@@ -5,10 +5,48 @@ A fleet manager for OpenCode agents over HTTP API.
 
 import base64
 import json
+import os
 import re
 import urllib.request
 
 _PASSWORD_RE = re.compile(r"server password\s+(\S+)")
+
+_PASSWORD_SOURCES = [
+    "/tmp/oc_serve.log",
+    os.path.expanduser("~/.local/share/opencode/serve.log"),
+]
+_SERVICE_CONFIG = os.path.expanduser("~/.config/opencode/service.json")
+
+
+def _find_password(password_file=None):
+    """Locate the server password.
+
+    Order: $OPENCODE_SERVER_PASSWORD, an explicit password_file, the
+    well-known serve logs, then the service config. The serve log lives in
+    /tmp and can be wiped, so the durable copy and service.json are the
+    safety net.
+    """
+    env_pw = os.environ.get("OPENCODE_SERVER_PASSWORD")
+    if env_pw:
+        return env_pw
+    candidates = [password_file] if password_file else []
+    candidates += _PASSWORD_SOURCES
+    for cand in candidates:
+        if not cand:
+            continue
+        try:
+            with open(cand, encoding="utf-8") as fh:
+                content = fh.read()
+        except OSError:
+            continue
+        match = _PASSWORD_RE.search(content)
+        if match:
+            return match.group(1)
+    try:
+        with open(_SERVICE_CONFIG, encoding="utf-8") as fh:
+            return json.load(fh).get("password") or None
+    except (OSError, ValueError):
+        return None
 
 
 class Fleet:
@@ -18,20 +56,14 @@ class Fleet:
     alongside a utility to sanitize agent output.
     """
 
-    def __init__(self, base_url="http://127.0.0.1:4096", password_file="/tmp/oc_serve.log"):
+    def __init__(self, base_url="http://127.0.0.1:4096", password_file=None):
         self.base_url = base_url.rstrip("/")
         self.headers = {"Content-Type": "application/json"}
-        try:
-            with open(password_file, encoding="utf-8") as fh:
-                content = fh.read()
-            match = _PASSWORD_RE.search(content)
-            if match:
-                password = match.group(1)
-                self.headers["Authorization"] = (
-                    "Basic " + base64.b64encode(f"opencode:{password}".encode()).decode()
-                )
-        except OSError:
-            self.headers = {"Content-Type": "application/json"}
+        password = _find_password(password_file)
+        if password:
+            self.headers["Authorization"] = (
+                "Basic " + base64.b64encode(f"opencode:{password}".encode()).decode()
+            )
 
     @staticmethod
     def sanitize(text):

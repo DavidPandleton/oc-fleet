@@ -68,7 +68,12 @@ class Orchestrator:
 
     def __init__(self, fleet=None, max_parallel=4, poll_interval=POLL_INTERVAL):
         self._fleet = fleet
-        self.max_parallel = max(1, int(max_parallel))
+        # max_parallel below 1 is a caller bug, not a preference. Clamping it
+        # silently to 1 meant `Orchestrator(max_parallel=0)` looked accepted and
+        # then ran strictly serial with no hint why. Fail loudly instead.
+        if int(max_parallel) < 1:
+            raise ValueError("max_parallel must be >= 1, got %r" % (max_parallel,))
+        self.max_parallel = int(max_parallel)
         self.poll_interval = poll_interval
         self._tasks = {}
         self._task_order = []
@@ -252,7 +257,7 @@ class Orchestrator:
                 self._finish_attempt(tid, info["last_state"], pending)
                 continue
             try:
-                state = self.fleet.status(session_id) or {}
+                state = self.fleet.status(session_id)
             except POLL_ERRORS as exc:
                 # A bad poll is a poll failure, not a task failure: keep the
                 # last known state and let the deadline decide. Never let it
@@ -268,7 +273,21 @@ class Orchestrator:
                     running[tid] = info
                 continue
             if not isinstance(state, dict):
+                # A falsy / non-dict status must not wipe the cached text: the
+                # old `status(...) or {}` replaced last_state with {} on a
+                # transient None, silently losing the last assistant text.
                 state = info["last_state"]
+            elif state.get("last_assistant_text") is None and info["last_state"].get(
+                "last_assistant_text"
+            ):
+                # The server reports the outcome and the text separately, and a
+                # later poll can legitimately carry outcome=None with text=None
+                # while an earlier poll already saw real progress. Keep the
+                # newest KNOWN text so a timeout report says what the task had
+                # produced rather than nothing.
+                merged = dict(state)
+                merged["last_assistant_text"] = info["last_state"]["last_assistant_text"]
+                state = merged
             info["last_state"] = state
             if state.get("outcome") is not None:
                 self._finish_attempt(tid, state, pending)
@@ -342,8 +361,14 @@ class Orchestrator:
 
     def results(self):
         """Return the results dict: task_id -> {status, session_id, outcome,
-        attempts, last_text, started_at, finished_at, duration}."""
-        return self._results
+        attempts, last_text, started_at, finished_at, duration}.
+
+        Returns a deep copy. This used to hand back the live internal dict, so a
+        caller doing `results()["a"]["status"] = "done"` silently corrupted
+        orchestrator state and the next sweep's decisions were made on a
+        doctored record. Cheap insurance: the dict is one row per task.
+        """
+        return {tid: dict(rec) for tid, rec in self._results.items()}
 
     def summary(self):
         """Return a human readable multi-line status summary."""

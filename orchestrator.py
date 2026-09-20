@@ -19,7 +19,17 @@ from dataclasses import dataclass, field
 from fleet import Fleet
 
 FAILED_OUTCOMES = {"failed", "crashed", "error", "cancelled", "canceled"}
-API_ERRORS = (OSError, ValueError, KeyError)
+# Exceptions raised by the fleet client that mean "this attempt failed", not
+# "the orchestrator is broken". The network failure space is too wide to
+# enumerate: ConnectionError and HTTPError are OSError subclasses, but
+# http.client.HTTPException (IncompleteRead, BadStatusLine) is NOT, and a
+# single one of those used to take the whole run down and strand every other
+# task in "running" forever.
+API_ERRORS = (OSError, ValueError, KeyError, ArithmeticError)
+# Everything else is treated the same way for polling purposes, because the
+# cost of a wrong guess is asymmetric: a crashed run strands live sessions,
+# whereas a wrongly-tolerated error only marks one attempt failed.
+POLL_ERRORS = Exception
 POLL_INTERVAL = 3.0
 
 
@@ -236,22 +246,40 @@ class Orchestrator:
         for tid in list(running):
             info = running.pop(tid)
             session_id = info["session_id"]
-            if session_id is None or time.monotonic() >= info["deadline"]:
+            if session_id is None:
+                # Dispatch never produced a session: this attempt failed before
+                # it started. Do not dress it up as a timeout.
                 self._finish_attempt(tid, info["last_state"], pending)
                 continue
             try:
                 state = self.fleet.status(session_id) or {}
-            except API_ERRORS:
-                state = info["last_state"]
+            except POLL_ERRORS as exc:
+                # A bad poll is a poll failure, not a task failure: keep the
+                # last known state and let the deadline decide. Never let it
+                # escape and strand the other tasks in this run.
+                info["last_state"] = dict(info["last_state"] or {})
+                info["last_state"]["last_assistant_text"] = (
+                    info["last_state"].get("last_assistant_text")
+                    or "poll failed: %s" % exc
+                )
+                if time.monotonic() >= info["deadline"]:
+                    self._finish_attempt(tid, info["last_state"], pending, timed_out=True)
+                else:
+                    running[tid] = info
+                continue
             if not isinstance(state, dict):
                 state = info["last_state"]
             info["last_state"] = state
             if state.get("outcome") is not None:
                 self._finish_attempt(tid, state, pending)
-            else:
-                running[tid] = info
+                continue
+            if time.monotonic() >= info["deadline"]:
+                # Deadline expired with no outcome: only NOW is it a timeout.
+                self._finish_attempt(tid, state, pending, timed_out=True)
+                continue
+            running[tid] = info
 
-    def _finish_attempt(self, tid, state, pending):
+    def _finish_attempt(self, tid, state, pending, timed_out=False):
         task = self._tasks[tid]
         rec = self._results[tid]
         outcome = state.get("outcome") if isinstance(state, dict) else None
@@ -275,7 +303,14 @@ class Orchestrator:
             return
         rec["status"] = "failed"
         if outcome is None:
-            print("failed: %s (timed out after %ss)" % (tid, task.timeout))
+            if timed_out:
+                print("failed: %s (timed out after %ss)" % (tid, task.timeout))
+            else:
+                print(
+                    "failed: %s (%s)"
+                    % (tid, state.get("last_assistant_text") if isinstance(state, dict) else None
+                       or "no outcome")
+                )
         else:
             print("failed: %s (outcome %s)" % (tid, outcome))
 

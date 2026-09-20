@@ -140,6 +140,57 @@ RULES: list[tuple[str, str, str, str, str]] = [
         "Pure questions are fine, but they produce an answer, not a change.",
         "If you need an artefact, add the deliverable explicitly.",
     ),
+    # The rules below come from an A/B experiment (2026-09-21) measuring whether
+    # delegating to the agent was faster than doing the work directly. It never
+    # was, but the experiment found something more useful: the agent's failure
+    # mode is not incompetence, it is filling interpretive gaps with its own
+    # plausible-sounding rules. A prompt that leaves a hole gets an invented
+    # constraint inside that hole. See ~/kb/projects/LAPORAN_FINAL.md.
+    (
+        "SPEC-UNDEFINED-EDGE",
+        "warn",
+        r"\b(and so on|etc\.?|other cases|similar cases|and the like|"
+        r"such cases)\b",
+        "Open-ended enumerations invite the agent to invent the remaining cases, "
+        "and it will invent them plausibly rather than ask.",
+        "Enumerate the edge cases explicitly, or say what to do when unsure "
+        "('raise an error for anything not listed').",
+    ),
+    (
+        "SPEC-TEST-ONLY-VALID",
+        "warn",
+        # Two shapes seen in real prompts: "verify all the examples" and
+        # "check that all the valid cases above return the right number". The
+        # first draft of this pattern only matched a narrow ordering and both
+        # failed; test_prompt_lint_spec_gaps.py caught it.
+        r"(\bverify\b[^.]*\b(all|the|these)\b[^.]*\b(examples?|cases?)\b"
+        r"|\bcheck\b[^.]*\b(all|the)\b[^.]*\b(examples?|valid cases?)\b"
+        r"|\bmake sure\b[^.]*\b(examples?|cases?)\b[^.]*\b(work|pass)\b)",
+        "Asking to verify only the listed cases confirms the happy path. In the "
+        "experiment the agent ran its own verification, it passed, and the "
+        "result was still wrong on an unlisted input.",
+        "Also specify what must FAIL, or ask for the boundary cases explicitly.",
+    ),
+    (
+        "SPEC-NO-INVALID-CONTRACT",
+        "info",
+        r"^\s*(?!.*\b(raise|error|invalid|reject|must not|fail|except)\b).*"
+        r"\b(function|method|def |implement|write a)\b.*$",
+        "The prompt asks for an implementation but never states what invalid "
+        "input should do, so the error contract is left to the agent.",
+        "State the error type and the cases that trigger it.",
+    ),
+    (
+        "SPEC-VERIFY-SELF-REFERENTIAL",
+        "info",
+        r"\b(run your own|verify your( own)? work|test it yourself|"
+        r"make sure (it|your) works?|check your work)\b",
+        "Self-verification is not independent evidence: the same model writes "
+        "the check and the code, so it validates its own assumptions. In the "
+        "experiment this produced a confident 'tests pass' on wrong output.",
+        "Verify against a grader written before the implementation, by a "
+        "different party, or against an external ground truth.",
+    ),
 ]
 
 

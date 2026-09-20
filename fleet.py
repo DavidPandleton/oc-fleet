@@ -3,6 +3,7 @@
 A fleet manager for OpenCode agents over HTTP API.
 """
 
+import base64
 import json
 import re
 import urllib.request
@@ -25,7 +26,10 @@ class Fleet:
                 content = fh.read()
             match = _PASSWORD_RE.search(content)
             if match:
-                self.headers["Authorization"] = "Bearer " + match.group(1)
+                password = match.group(1)
+                self.headers["Authorization"] = (
+                    "Basic " + base64.b64encode(f"opencode:{password}".encode()).decode()
+                )
         except OSError:
             self.headers = {}
 

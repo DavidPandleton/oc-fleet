@@ -1,6 +1,8 @@
 """Tests for fleet.Fleet using mocked urllib.request.urlopen."""
 
+import base64
 import json
+import tempfile
 import unittest
 from unittest import mock
 
@@ -20,7 +22,21 @@ def _context(payload):
 class FleetTestCase(unittest.TestCase):
     def setUp(self):
         self.fleet = Fleet(base_url="http://127.0.0.1:4096", password_file="/nonexistent")
-        self.fleet.headers["Authorization"] = "Bearer testpass"
+        self.fleet.headers["Authorization"] = (
+            "Basic " + base64.b64encode(b"opencode:testpass").decode()
+        )
+
+    def test_auth_header_is_basic_from_password_file(self):
+        with tempfile.NamedTemporaryFile("w", suffix=".log", delete=False) as fh:
+            fh.write("server password s3cret\n")
+            path = fh.name
+        fleet = Fleet(base_url="http://127.0.0.1:4096", password_file=path)
+        expected = "Basic " + base64.b64encode(b"opencode:s3cret").decode()
+        self.assertEqual(fleet.headers["Authorization"], expected)
+
+    def test_auth_header_absent_without_password_file(self):
+        fleet = Fleet(base_url="http://127.0.0.1:4096", password_file="/nonexistent")
+        self.assertEqual(fleet.headers, {})
 
     @mock.patch("urllib.request.urlopen")
     def test_dispatch_returns_session_id(self, urlopen):

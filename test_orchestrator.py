@@ -6,6 +6,7 @@ import time
 import unittest
 
 from fleet import Fleet
+from ratelimit import ConcurrencyLimiter
 from orchestrator import Orchestrator, Task
 
 
@@ -58,6 +59,8 @@ class FakeFleet:
         self.fail_dispatch = False
         self.fail_dispatch_with: BaseException | None = None
         self.stuck_sessions = set()
+        self.concurrency_limiter = None
+        self.rate_limiter = None
         self._outcomes = {}
         self._finished = set()
         self._next_idx = {}
@@ -620,8 +623,17 @@ class DispatchConfigTestCase(unittest.TestCase):
         self.assertEqual(task.retries, 0)
         self.assertEqual(task.timeout, 1800)
 
-    def test_default_poll_interval_is_three_seconds(self):
-        self.assertEqual(Orchestrator(fleet=FakeFleet()).poll_interval, 3.0)
+    def test_default_poll_interval_gives_provider_headroom(self):
+        """Default 10 detik, bukan 3.
+
+        3 detik x 4 task paralel = sekitar 80 request per menit hanya untuk
+        polling. Provider cutad membatasi 25 request per menit DAN 15
+        request bersamaan; tiap poll memakai slot yang dibutuhkan agent
+        untuk bekerja. Terukur: 81 respons 429 dan 17 kegagalan
+        "Concurrency limit exceeded" saat enam task berjalan bersamaan.
+        """
+        self.assertEqual(Orchestrator(fleet=FakeFleet()).poll_interval, 10.0)
+        self.assertGreaterEqual(Orchestrator(fleet=FakeFleet()).poll_interval, 10.0)
 
     def test_dispatch_error_marks_task_failed(self):
         fleet = FakeFleet()
@@ -713,10 +725,39 @@ class DispatchConfigTestCase(unittest.TestCase):
         self.assertEqual(orch.results()["a"]["status"], "failed")
 
     def test_fleet_is_lazily_created_when_not_provided(self):
+        """Tanpa fleet, Orchestrator membuatnya sendiri.
+
+        Dulu `_fleet` sengaja dibiarkan None dan properti `fleet` yang
+        membuatnya. Sekarang `__init__` membuatnya langsung - karena
+        pembatas laju dan konkurensi harus dipasang ke klien SEBELUM
+        panggilan pertama, dan properti yang mengisi malas tidak memberi
+        kesempatan itu.
+        """
         orch = Orchestrator(max_parallel=1)
-        self.assertIsNone(orch._fleet)
-        self.assertIsInstance(orch.fleet, Fleet)
+        self.assertIsInstance(orch._fleet, Fleet)
         self.assertIs(orch._fleet, orch.fleet)
+        # Pembatas konkurensi terpasang tanpa perlu akses properti dulu.
+        # Itu batas yang benar-benar ditegakkan provider (15 bersamaan).
+        self.assertIsNotNone(orch._fleet.concurrency_limiter)
+        # Pembatas laju TIDAK dipasang default: membatasinya pada 25/menit
+        # terbukti menghukum pemakaian wajar (24 request: 0.1s -> 43s).
+        self.assertIsNone(orch._fleet.rate_limiter)
+
+    def test_limiter_not_installed_twice(self):
+        """Klien yang sudah punya pembatas tidak ditimpa."""
+        fleet = FakeFleet()
+        pembatas = ConcurrencyLimiter(3)
+        fleet.concurrency_limiter = pembatas
+        orch = Orchestrator(fleet=fleet, max_parallel=1)
+        self.assertIs(orch.fleet.concurrency_limiter, pembatas)
+
+    def test_limiter_can_be_disabled(self):
+        """concurrency_limit=None / rate_per_minute=None melewati pemasangan."""
+        fleet = FakeFleet()
+        orch = Orchestrator(fleet=fleet, max_parallel=1,
+                            concurrency_limit=None, rate_per_minute=None)
+        self.assertIsNone(getattr(fleet, "concurrency_limiter", None))
+        self.assertIsNone(getattr(fleet, "rate_limiter", None))
 
 
 class SelfLoopTestCase(unittest.TestCase):

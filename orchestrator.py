@@ -19,6 +19,7 @@ import time
 from dataclasses import dataclass, field
 
 from fleet import Fleet
+from ratelimit import ConcurrencyLimiter, RateLimiter
 
 FAILED_OUTCOMES = {"failed", "crashed", "error", "cancelled", "canceled"}
 # Both call sites around a running session catch everything, for the same
@@ -49,7 +50,36 @@ RUN_ERRORS = Exception
 # Kept as the name the polling path reads; identical by construction.
 POLL_ERRORS = RUN_ERRORS
 DISPATCH_ERRORS = RUN_ERRORS
-POLL_INTERVAL = 3.0
+# Interval polling. 3.0 dulu, dan itu terlalu agresif untuk provider
+# yang membatasi konkurensi: dengan 4 task paralel, 3 detik berarti
+# sekitar 80 request per menit hanya untuk polling - dan tiap request
+# memakai slot konkurensi yang dibutuhkan agent untuk bekerja.
+# Terukur di mesin ini: 81 respons 429 dan 17 kegagalan "Concurrency
+# limit exceeded" ketika enam task berjalan bersamaan.
+#
+# 10 detik memberi ruang bernapas tanpa membuat respons terasa lambat:
+# task yang benar-benar bekerja jarang berubah dalam 10 detik, dan
+# deteksi macet tetap menangkap sesi berhenti jauh sebelum deadline.
+POLL_INTERVAL = 10.0
+# Batas konkurensi provider cutad. Ditemukan dari pesan 429 di log
+# server: "You already have 15 active request(s); your plan allows 15".
+# Disisakan satu slot supaya panggilan di luar oc-fleet tidak langsung
+# ditolak.
+#
+# INI pembatas yang penting. Provider membatasi KONKURENSI, bukan
+# laju: 15 request bersamaan. Membatasi konkurensi di sini menyerang
+# penyebabnya langsung.
+PROVIDER_CONCURRENCY = 14
+# Batas 25 request/menit juga ada, tapi JANGAN dipakai sebagai
+# throttle ketat. Diukur: membatasi 24 request pada 25/menit membuat
+# operasi 0.1 detik menjadi 43 detik - 400x lebih lambat - karena
+# 25/menit sama dengan 0.42/detik, dan itu menghukum pemakaian wajar.
+#
+# Batas laju hanya dijadikan jaring pengaman untuk lonjakan
+# (burst), dengan kapasitas kecil supaya dispatch awal tidak
+# menghabiskan kuota sekaligus. Nilai None mematikannya.
+PROVIDER_RATE_PER_MINUTE = None
+PROVIDER_BURST = 10
 
 
 @dataclass
@@ -85,11 +115,12 @@ class Orchestrator:
     Statuses: pending, running, succeeded, failed, skipped.
     """
 
-    def __init__(self, fleet=None, max_parallel=4, poll_interval=POLL_INTERVAL):
-        self._fleet = fleet
-        # max_parallel below 1 is a caller bug, not a preference. Clamping it
-        # silently to 1 meant `Orchestrator(max_parallel=0)` looked accepted and
-        # then ran strictly serial with no hint why. Fail loudly instead.
+    def __init__(self, fleet=None, max_parallel=4, poll_interval=POLL_INTERVAL,
+                 concurrency_limit=PROVIDER_CONCURRENCY,
+                 rate_per_minute=PROVIDER_RATE_PER_MINUTE,
+                 burst=PROVIDER_BURST):
+        if fleet is None:
+            fleet = Fleet()
         if int(max_parallel) < 1:
             raise ValueError("max_parallel must be >= 1, got %r" % (max_parallel,))
         self.max_parallel = int(max_parallel)
@@ -97,6 +128,32 @@ class Orchestrator:
         self._tasks = {}
         self._task_order = []
         self._results = {}
+        self._fleet = fleet
+
+        # Pasang pembatas pada klien kalau belum ada. Tanpa ini, oc-fleet
+        # membanjiri server dengan pollingnya sendiri dan mendapat 429 -
+        # yang tampak seperti model rusak atau sesi macet.
+        #
+        # Konkurensi lebih dulu dan selalu: itu batas yang benar-benar
+        # ditegakkan provider (15 bersamaan).
+        if getattr(fleet, "concurrency_limiter", None) is None and concurrency_limit:
+            try:
+                fleet.concurrency_limiter = ConcurrencyLimiter(concurrency_limit)
+            except (AttributeError, ValueError):
+                pass
+        # Pembatas laju hanya kalau diminta. Default None: membatasi pada
+        # 25/menit terbukti menghukum pemakaian wajar (24 request berubah
+        # dari 0.1s menjadi 43s) tanpa memberi manfaat - yang ditolak
+        # provider adalah konkurensi.
+        if (getattr(fleet, "rate_limiter", None) is None
+                and rate_per_minute and burst):
+            try:
+                fleet.rate_limiter = RateLimiter(
+                    rate=rate_per_minute / 60.0,
+                    capacity=max(1.0, min(burst, rate_per_minute / 2.0)),
+                )
+            except (AttributeError, ValueError):
+                pass
 
     @property
     def fleet(self):

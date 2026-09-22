@@ -10,6 +10,7 @@ import urllib.error
 import urllib.request
 
 import endpoint
+from ratelimit import RetryAfter
 
 
 class Fleet:
@@ -19,7 +20,8 @@ class Fleet:
     alongside a utility to sanitize agent output.
     """
 
-    def __init__(self, base_url=None, password_file=None, discover_endpoint=None):
+    def __init__(self, base_url=None, password_file=None, discover_endpoint=None,
+                 rate_limiter=None, concurrency_limiter=None):
         """Buat klien.
 
         Kalau `base_url` tidak diberikan, alamat dan password DITEMUKAN
@@ -28,6 +30,12 @@ class Fleet:
         mana pun, jadi default tetap `http://127.0.0.1:4096` salah hampir
         selalu. Itu dulu membuat setiap panggilan gagal dengan 401 sampai
         seseorang mengoper `--base-url` dengan tangan.
+
+        `rate_limiter` dan `concurrency_limiter` membatasi panggilan ke
+        server. Provider `cutad` membatasi 25 request/menit dan 15 request
+        bersamaan; tanpa pembatas, polling oc-fleet sendiri melanggar
+        keduanya (terukur: 81 respons 429 di log server). Keduanya
+        opsional supaya pemanggil lama dan unit test tidak terpengaruh.
 
         `discover_endpoint` hanya untuk pengujian: menggantikan fungsi
         penemuan supaya unit test tidak menyentuh jaringan.
@@ -44,6 +52,12 @@ class Fleet:
             self.headers["Authorization"] = (
                 "Basic " + base64.b64encode(f"opencode:{password}".encode()).decode()
             )
+        self.rate_limiter = rate_limiter
+        self.concurrency_limiter = concurrency_limiter
+        # Berapa kali `_request` melihat HTTP 429, dan berapa lama total
+        # menunggu karena pembatas. Berguna untuk melaporkan bahwa
+        # kegagalan berasal dari batas, bukan dari model.
+        self.throttled_count = 0
 
     @staticmethod
     def sanitize(text):
@@ -58,14 +72,55 @@ class Fleet:
         """
         return text.replace("\u2014", "-").replace("\u2013", "-")
 
-    def _request(self, method, path, data=None):
+    def _request(self, method, path, data=None, _attempts=4):
+        """Satu panggilan HTTP, tunduk pada pembatas laju dan konkurensi.
+
+        Pembatas dipakai di sini - satu tempat - supaya setiap jalur
+        (dispatch, status, list, cancel) ikut terbatas tanpa perlu ingat
+        memanggilnya masing-masing.
+
+        HTTP 429 dicoba ulang dengan mundur eksponensial, bukan langsung
+        dilempar. Provider ini menjawab 429 saat konkurensi lewat, dan itu
+        bersifat sementara: melempar langsung membuat satu spike mengubah
+        menjadi kegagalan task yang tampak seperti masalah lain.
+        """
+        if self.rate_limiter is not None:
+            self.rate_limiter.acquire()
         url = self.base_url + path
         payload = None
         if data is not None:
             payload = json.dumps(data).encode("utf-8")
-        request = urllib.request.Request(url, data=payload, headers=self.headers, method=method)
-        with urllib.request.urlopen(request) as response:
-            body = response.read()
+
+        percobaan = 0
+        sementara = None
+        if self.concurrency_limiter is not None:
+            self.concurrency_limiter.acquire()
+        try:
+            while True:
+                percobaan += 1
+                request = urllib.request.Request(
+                    url, data=payload, headers=self.headers, method=method
+                )
+                try:
+                    with urllib.request.urlopen(request) as response:
+                        body = response.read()
+                    break
+                except urllib.error.HTTPError as exc:
+                    if exc.code != 429 or percobaan >= _attempts:
+                        raise
+                    self.throttled_count += 1
+                    retry_after = exc.headers.get("Retry-After") if exc.headers else None
+                    jeda = RetryAfter().delay(percobaan, retry_after)
+                    sementara = jeda
+                    time.sleep(jeda)
+        finally:
+            if self.concurrency_limiter is not None:
+                self.concurrency_limiter.release()
+
+        if sementara is not None:
+            # Catat supaya pemanggil bisa membedakan "kena batas" dari
+            # "modelnya rusak" - keduanya tampak sama dari outcome saja.
+            self.last_throttle_wait = sementara
         if not body:
             return None
         return json.loads(body)

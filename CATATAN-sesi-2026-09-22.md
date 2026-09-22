@@ -152,3 +152,54 @@ Dipisah dengan sengaja:
 
 Kedua baris terakhir itu penting: prediksi yang benar bukan pengganti
 bukti, dan CI-lah yang mengubah prediksi jadi bukti.
+
+---
+
+## Tambahan kedua: pola "perbaiki di satu tempat, bukan di setiap pemakai"
+
+Dua bug lagi, keduanya bentuk yang sama: aturan/penjagaan ada, tapi
+diterapkan di tempat yang salah.
+
+### `Fleet.sanitize` hanya dipanggil di satu dari tiga jalur
+
+Fungsi itu ada khusus untuk mencegah em-dash keluar. Tapi hanya
+`cli.py` `cmd_show` yang memanggilnya:
+
+| jalur | dulu | sekarang |
+|---|---|---|
+| `oc-fleet show` | aman (memanggil sanitize) | aman |
+| `oc-fleet-wait.py` result JSON | **em-dash bocor** | aman |
+| `orchestrator` `last_text` | **em-dash bocor** | aman |
+
+Perbaikan: sanitasi dipindah ke `status()`, di batas tempat teks masuk.
+Setiap pemakai mewarisi. Kalau ditambah jalur keempat nanti, dia ikut
+aman tanpa perlu diingat.
+
+### Kerapuhan bentuk respons hanya dijaga di satu fungsi
+
+`list_sessions` dan `stats` sudah memakai `isinstance` sejak awal.
+`status()` tidak. Enam bentuk respons rusak melempar AttributeError atau
+TypeError keluar dari sana.
+
+Dampaknya beda per pemanggil, dan itu yang membuatnya tidak terlihat:
+- orchestrator dan waiter **selamat** (`RUN_ERRORS = Exception`)
+- `oc-fleet show` dan dashboard **tidak selamat** (menangkap lebih sempit)
+
+Jadi menguji lewat orchestrator saja tidak akan menemukannya.
+
+### Pelajaran yang sama, dua kali
+
+Keduanya diperbaiki di **sumber**, bukan di setiap pemanggil. Mengingat
+untuk memanggil penjagaan di tiap tempat baru adalah cara bug ini muncul
+pertama kali.
+
+---
+
+## Angka akhir sesi
+
+```
+suite    : 224 lulus, 24 subtes
+commit   : 32 sejak 39ffed5
+CI       : GitHub Actions, matrix 3.9 / 3.11 / 3.12, hijau
+worktree : bersih
+```

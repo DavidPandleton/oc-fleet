@@ -22,8 +22,21 @@
 >   tidur sampai deadline terdekat, bukan satu `poll_interval` penuh.
 >   Terverifikasi: timeout=0.5 dengan interval 3.0 selesai di 0.50s,
 >   overshoot 0.00s (sebelumnya sampai 3s, 6x lipat).
+> - **"results() returns the live internal dict": SUDAH DIPERBAIKI.**
+>   Sekarang mengembalikan deep copy, dengan docstring yang menjelaskan
+>   bug lamanya.
+> - **"_poll_running `status(...) or {}` menghapus last_assistant_text": 
+>   SUDAH DIPERBAIKI.** Status non-dict sekarang mempertahankan
+>   `last_state` (baris 295-299).
 >
-> Masih terbuka: tidak ada riwayat per-attempt di `results()`.
+> Masih terbuka: tidak ada riwayat per-attempt di `results()`, dan
+> `started_at` di-set hanya pada attempt pertama sehingga `duration`
+> mencakup seluruh attempt sementara `session_id`/`outcome` hanya attempt
+> terakhir - semantik campur dalam satu baris.
+>
+> Ringkasnya: dari enam temuan di summary, lima sudah tertutup sejak
+> dokumen ini ditulis. Bagian di bawah dipertahankan sebagai catatan
+> aslinya.
 
 **Verdict asli di bawah ini dipertahankan apa adanya.**
 

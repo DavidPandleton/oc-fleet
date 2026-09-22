@@ -185,17 +185,39 @@ def cmd_status(args):
     states = {}
     active = []
     completed = []
+    belum_mulai = []
     for session in sessions:
         sid = _session_id(session)
         state = fleet.status(sid) or {}
         states[sid] = state
-        if state.get("outcome") is None:
+        if state.get("outcome") is not None:
+            completed.append(session)
+        elif state.get("started"):
             active.append(session)
         else:
-            completed.append(session)
+            # outcome None DAN tidak ada satu pun pesan: sesi ini dibuat
+            # tapi belum pernah diberi prompt. Dulu ikut dihitung aktif,
+            # sehingga sesi kosong yang ditinggalkan tampak seperti
+            # pekerjaan yang berjalan - dan orang menungguinya.
+            belum_mulai.append(session)
     lines = ["server: up", "active sessions: %d" % len(active)]
     for session in active:
-        lines.append("  %s  %s  %s" % (_session_id(session), _clip(session.get("title")), _session_time(session)))
+        sid = _session_id(session)
+        catatan = ""
+        if states[sid].get("stuck"):
+            detik = states[sid].get("stuck_seconds")
+            catatan = "  [MACET %s]" % ("%.0fs" % detik if detik else "")
+        lines.append(
+            "  %s  %s  %s%s"
+            % (sid, _clip(session.get("title")), _session_time(session), catatan)
+        )
+    if belum_mulai:
+        lines.append("created but never prompted: %d" % len(belum_mulai))
+        for session in belum_mulai[:5]:
+            lines.append(
+                "  %s  %s  %s"
+                % (_session_id(session), _clip(session.get("title")), _session_time(session))
+            )
     lines.append("last 5 completed:")
     if completed:
         for session in completed[:5]:

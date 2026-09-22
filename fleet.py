@@ -285,6 +285,13 @@ class Fleet:
                 last_text = self.sanitize(assistant_text)
         hasil = {"outcome": outcome, "last_assistant_text": last_text}
         hasil.update(self._tool_activity(messages))
+        # Sesi tanpa satu pun pesan belum pernah diberi prompt. Tanpa
+        # penanda ini, `cmd_status` menghitungnya sebagai "aktif" hanya
+        # karena `outcome` masih None - sehingga sebuah sesi kosong yang
+        # dibuat dan ditinggalkan tampak seperti pekerjaan yang berjalan.
+        # Terukur: enam sesi probe kosong membuat `oc-fleet status`
+        # melaporkan "6 sesi aktif" padahal tidak ada apa pun berjalan.
+        hasil["started"] = bool(messages)
         return hasil
 
     def cancel(self, session_id):

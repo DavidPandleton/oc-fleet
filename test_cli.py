@@ -39,8 +39,8 @@ class TestStatus(CliBase):
             {"id": "s2", "title": "done job", "time": {"updated": 1700000000000}},
         ]
         fleet.status.side_effect = [
-            {"outcome": None, "last_assistant_text": None},
-            {"outcome": "done", "last_assistant_text": "ok"},
+            {"outcome": None, "last_assistant_text": None, "started": True},
+            {"outcome": "done", "last_assistant_text": "ok", "started": True},
         ]
         fleet.stats.return_value = {"sessions": 2}
         with mock.patch("sys.stdout", new_callable=io.StringIO) as out:
@@ -52,6 +52,51 @@ class TestStatus(CliBase):
         self.assertIn("s1", text)
         self.assertIn("s2  done", text)
         self.assertIn("sessions=2", text)
+
+    @mock.patch("cli.Fleet")
+    def test_status_separates_never_prompted_sessions(self, fleet_cls):
+        """Sesi tanpa pesan adalah "dibuat", bukan "aktif".
+
+        Terukur: enam sesi probe kosong membuat `oc-fleet status`
+        melaporkan "6 sesi aktif" padahal tidak ada apa pun berjalan.
+        Siapa pun yang membaca itu akan menunggui pekerjaan yang tidak ada.
+
+        Bedanya dari deteksi macet: sesi seperti ini tidak punya tool
+        sama sekali, jadi `stuck` juga False - hanya jumlah pesan yang
+        membedakannya.
+        """
+        fleet = fleet_cls.return_value
+        fleet.list_sessions.return_value = [
+            {"id": "s1", "title": "belum pernah"},
+            {"id": "s2", "title": "benar-benar jalan"},
+        ]
+        fleet.status.side_effect = [
+            {"outcome": None, "last_assistant_text": None, "started": False},
+            {"outcome": None, "last_assistant_text": "bekerja", "started": True},
+        ]
+        fleet.stats.return_value = {}
+        with mock.patch("sys.stdout", new_callable=io.StringIO) as out:
+            code = self.run_cli("status")
+        self.assertEqual(code, 0)
+        text = out.getvalue()
+        self.assertIn("active sessions: 1", text)
+        self.assertIn("created but never prompted: 1", text)
+
+    @mock.patch("cli.Fleet")
+    def test_status_marks_stuck_sessions(self, fleet_cls):
+        """Sesi yang macet ditandai, bukan diam-diam dihitung aktif."""
+        fleet = fleet_cls.return_value
+        fleet.list_sessions.return_value = [{"id": "s1", "title": "nyangkut"}]
+        fleet.status.return_value = {
+            "outcome": None, "last_assistant_text": None, "started": True,
+            "tool_running": 1, "stuck_seconds": 1244.0, "stuck": True,
+        }
+        fleet.stats.return_value = {}
+        with mock.patch("sys.stdout", new_callable=io.StringIO) as out:
+            self.run_cli("status")
+        text = out.getvalue()
+        self.assertIn("MACET", text)
+        self.assertIn("1244", text)
 
     @mock.patch("cli.Fleet")
     def test_status_empty_fleet(self, fleet_cls):

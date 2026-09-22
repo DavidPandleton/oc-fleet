@@ -45,6 +45,19 @@ input tidak lengkap. Perilaku diam untuk `no-slash` **sengaja dikunci** oleh
 modelnya dipakai, padahal sesi jalan dengan model default. Tidak ada cara
 bagi pemanggil untuk tahu.
 
+### Bukti tambahan: server TIDAK menolak body rusak
+
+Diuji langsung ke server OpenCode hidup. `POST /api/session` dengan
+`providerID: ""` atau `providerID: " cutad"`:
+
+- HTTP **200**, bukan 400
+- body rusak **diterima dan disimpan** di sesi
+
+Jadi bug ini lebih buruk dari sekadar "server menolak dengan error". Server
+menerimanya, membuat sesi dengan provider kosong, dan sesi itu baru gagal
+**nanti** - jauh dari titik bug-nya. Pengguna tidak akan menghubungkannya
+dengan input model yang salah ketik.
+
 ### Catatan verifikasi
 
 Bukan bug: split di slash **pertama** justru benar kalau nama model
@@ -77,7 +90,17 @@ Diuji terhadap server hidup (bukan asumsi). Bentuk respons nyata endpoint
 | Kredensial salah | 401 | (kosong) | `False` |
 | Server mati | - | connection error | `False` |
 
-`False` berarti minimal empat hal berbeda:
+Diverifikasi ulang lewat `fleet.cancel()` langsung (bukan simulasi logika):
+satu nilai `False` dipakai untuk **lima** keadaan berbeda - sesi sudah
+selesai, sesi belum pernah jalan, sesi tidak ada (404), kredensial salah
+(401), dan server tidak terjangkau. Hanya `True` yang tidak ambigu.
+
+Tiga dari lima itu kegagalan nyata: pemanggil yang membaca `False` lalu
+melanjutkan retry bisa mengira sesinya sudah berhenti, padahal server tidak
+pernah berhasil dihubungi. Untuk pemakaian di orchestrator (cancel lalu
+retry), perbedaan ini penting.
+
+`False` berarti lima hal berbeda:
 
 1. server bilang "tidak ada yang perlu dihentikan" (sesi sudah selesai)
 2. sesi tidak ada (404 - mungkin salah session ID)
@@ -109,3 +132,17 @@ atau lempar pengecualian untuk kegagalan keras (404/401/tidak terhubung)
 sambil tetap mengembalikan `False` untuk "sesi sudah selesai".
 
 Kedua masalah belum diperbaiki. Kode tidak diubah.
+
+---
+
+## Tes karakterisasi
+
+`test_review_temuan.py` (11 tes) mengunci perilaku yang ada sekarang, supaya
+perbaikan di masa depan harus mengubahnya secara sadar.
+
+Sudah diuji mutasi - tes ini benar-benar mendeteksi, bukan dekorasi:
+
+- perbaikan `dispatch()` sementara (strip spasi + tolak provider kosong)
+  -> 3 tes gagal, tes yang tidak relevan tetap lulus
+- perbaikan `cancel()` sementara (lempar 404/401)
+  -> 3 tes gagal, jalur normal tetap lulus

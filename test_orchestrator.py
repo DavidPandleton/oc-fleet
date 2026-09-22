@@ -164,6 +164,36 @@ class AddAndValidateTestCase(unittest.TestCase):
         orch.add(Task(id="d", prompt="p", depends_on=["b", "c"]))
         orch.validate()  # must not raise
 
+    def test_validate_rejects_empty_workdir(self):
+        """workdir kosong ditangkap di validate(), bukan di tengah run.
+
+        Fleet.dispatch menolaknya juga, tapi kalau baru ketahuan saat
+        dispatch, sesi lain sudah berjalan dan menulis ke tree yang sama.
+        """
+        orch = Orchestrator(fleet=FakeFleet())
+        orch.add(Task(id="a", prompt="p", workdir="  "))
+        with self.assertRaises(ValueError) as ctx:
+            orch.validate()
+        self.assertIn("workdir", str(ctx.exception))
+        self.assertIn("'a'", str(ctx.exception))
+
+    def test_validate_rejects_empty_prompt(self):
+        orch = Orchestrator(fleet=FakeFleet())
+        orch.add(Task(id="a", prompt=""))
+        with self.assertRaises(ValueError) as ctx:
+            orch.validate()
+        self.assertIn("prompt", str(ctx.exception))
+
+    def test_validate_rejects_bad_task_before_any_dispatch(self):
+        """validate() menolak sebelum satu sesi pun dibuat."""
+        fleet = FakeFleet()
+        orch = Orchestrator(fleet=fleet)
+        orch.add(Task(id="good", prompt="p", workdir="/tmp/x"))
+        orch.add(Task(id="bad", prompt="p", workdir=""))
+        with self.assertRaises(ValueError):
+            orch.run()
+        self.assertEqual(fleet.dispatched, [])
+
     def test_run_rejects_cycle(self):
         orch = Orchestrator(fleet=FakeFleet())
         orch.add(Task(id="a", prompt="p"))

@@ -102,9 +102,21 @@ class Orchestrator:
         self._results[task.id] = _new_record()
 
     def validate(self):
-        """Raise ValueError on a missing dependency or a dependency cycle."""
+        """Raise ValueError on a malformed task, missing dependency, or cycle.
+
+        The per-task checks mirror what ``Fleet.dispatch`` now rejects, and
+        exist so the failure lands here, before anything is dispatched. A
+        bad ``workdir`` caught mid-run aborts one session while its
+        siblings are already writing to the shared tree, which is far
+        harder to reason about than a refusal up front.
+        """
         for tid in self._task_order:
-            for dep in self._tasks[tid].depends_on:
+            task = self._tasks[tid]
+            if not isinstance(task.prompt, str) or not task.prompt.strip():
+                raise ValueError("task %r has an empty prompt" % tid)
+            if not isinstance(task.workdir, str) or not task.workdir.strip():
+                raise ValueError("task %r has an empty workdir" % tid)
+            for dep in task.depends_on:
                 if dep not in self._tasks:
                     raise ValueError("task %r depends on unknown task %r" % (tid, dep))
         cycle = self._find_cycle()

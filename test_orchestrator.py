@@ -187,6 +187,35 @@ class AddAndValidateTestCase(unittest.TestCase):
             orch.validate()
         self.assertIn("prompt", str(ctx.exception))
 
+    def test_self_loop_is_rejected_by_validate(self):
+        """Task yang bergantung pada dirinya sendiri ditolak validate().
+
+        Celah tes yang review sebut: tes 2-node dan 3-node ada, tapi tidak
+        ada yang menutup kasus self-edge. Regresi khusus `dep == root` akan
+        lolos CI. Diverifikasi dulu bahwa validate() memang menangkapnya.
+        """
+        orch = Orchestrator(fleet=FakeFleet())
+        orch.add(Task(id="a", prompt="p"))
+        # add() menolak self-loop saat task belum terdaftar; suntik lewat
+        # untuk menguji jalur validate()/`_find_cycle` secara langsung.
+        orch._tasks["a"].depends_on = ["a"]
+        with self.assertRaises(ValueError) as ctx:
+            orch.validate()
+        self.assertIn("cycle", str(ctx.exception))
+
+    def test_find_cycle_returns_self_loop(self):
+        """_find_cycle mengembalikan ['a', 'a'] untuk self-loop."""
+        orch = Orchestrator(fleet=FakeFleet())
+        orch.add(Task(id="a", prompt="p"))
+        orch._tasks["a"].depends_on = ["a"]
+        self.assertEqual(orch._find_cycle(), ["a", "a"])
+
+    def test_add_rejects_self_loop_up_front(self):
+        """add() menolak self-loop lebih awal lagi."""
+        orch = Orchestrator(fleet=FakeFleet())
+        with self.assertRaises(ValueError):
+            orch.add(Task(id="a", prompt="p", depends_on=["a"]))
+
     def test_validate_rejects_bad_task_before_any_dispatch(self):
         """validate() menolak sebelum satu sesi pun dibuat."""
         fleet = FakeFleet()

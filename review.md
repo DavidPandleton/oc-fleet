@@ -32,13 +32,13 @@
 > Masih terbuka: tidak ada riwayat per-attempt di `results()`, dan
 > `started_at` di-set hanya pada attempt pertama sehingga `duration`
 > mencakup seluruh attempt sementara `session_id`/`outcome` hanya attempt
-> terakhir - semantik campur dalam satu baris.
+> terakhir - semantik campur dalam satu baris. Keduanya sekarang
+> didokumentasikan di docstring `results()`, bukan diubah, karena tidak
+> ada pemakai yang membaca `duration` selain tes.
 >
-> Ringkasnya: dari enam temuan di summary, lima sudah tertutup sejak
-> dokumen ini ditulis. Bagian di bawah dipertahankan sebagai catatan
-> aslinya.
-
-**Verdict asli di bawah ini dipertahankan apa adanya.**
+> Ringkasnya: **seluruh enam temuan di summary sudah tertutup atau
+> terdokumentasi.** Bagian di bawah dipertahankan sebagai catatan
+> aslinya, apa adanya.
 
 Scope: the six failure modes requested. Every claim below was checked against the
 source and, where marked **(probe)**, reproduced by executing the code against the

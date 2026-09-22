@@ -592,15 +592,43 @@ class DashboardHandler(BaseHTTPRequestHandler):
         else:
             self._send_json(404, {"error": "not found"})
 
+    def _read_content_length(self):
+        """Return the request body length, or None if the header is unusable.
+
+        The header arrives from the network, so it is not trusted input.
+        `Content-Length: abc` used to hit `int(...)` directly and raise
+        ValueError out of the handler: the client got no response at all and
+        hung until timeout, while the server printed a traceback. Reproduced
+        with a raw socket. Anything unparseable or negative is now a 400.
+        """
+        raw = self.headers.get("Content-Length")
+        if raw is None:
+            return 0
+        try:
+            length = int(raw.strip())
+        except (TypeError, ValueError):
+            return None
+        if length < 0:
+            return None
+        return length
+
     def do_POST(self):
         if self.path != "/api/dispatch":
             self._send_json(404, {"error": "not found"})
             return
-        length = int(self.headers.get("Content-Length") or 0)
+        length = self._read_content_length()
+        if length is None:
+            self._send_json(400, {"error": "invalid Content-Length header"})
+            return
         raw = self.rfile.read(length) if length else b""
         try:
             data = json.loads(raw.decode("utf-8")) if raw else {}
-        except json.JSONDecodeError:
+        except (json.JSONDecodeError, UnicodeDecodeError):
+            # Both are reachable from the network. JSONDecodeError covers a
+            # well-formed-but-invalid body; UnicodeDecodeError covers raw
+            # bytes that are not UTF-8 at all. Catching only the first left
+            # a non-UTF-8 body raising out of the handler with no response,
+            # the same failure shape as the Content-Length bug above.
             self._send_json(400, {"error": "invalid JSON body"})
             return
         try:

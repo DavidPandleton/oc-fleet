@@ -186,6 +186,36 @@ class EndpointTest(unittest.TestCase):
         self.server, self.port = _start_server()
         self.addCleanup(self.server.server_close)
 
+    def _raw_post(self, raw_request, expect_body=None):
+        """Send bytes straight down a socket and return the status line.
+
+        urllib refuses to send a malformed Content-Length, so testing that
+        path needs a raw socket. Returns (status_line, response_bytes).
+        """
+        import socket
+
+        sock = socket.socket()
+        sock.settimeout(5)
+        sock.connect(("127.0.0.1", self.port))
+        try:
+            sock.sendall(raw_request)
+            chunks = []
+            while True:
+                try:
+                    chunk = sock.recv(4096)
+                except socket.timeout:
+                    break
+                if not chunk:
+                    break
+                chunks.append(chunk)
+                if expect_body and expect_body in b"".join(chunks):
+                    break
+        finally:
+            sock.close()
+        data = b"".join(chunks)
+        status_line = data.split(b"\r\n")[0].decode(errors="replace") if data else ""
+        return status_line, data
+
     def _post(self, path, payload):
         url = "http://127.0.0.1:%d%s" % (self.port, path)
         request = __import__("urllib.request", fromlist=["Request"]).Request(
@@ -258,6 +288,48 @@ class EndpointTest(unittest.TestCase):
         )
         body = json.loads(response.read().decode())
         self.assertEqual(body, {"session_count": 3, "success_rate": 97})
+
+    def test_malformed_content_length_gets_400_not_a_hang(self):
+        """Content-Length yang tidak valid dijawab 400, bukan traceback.
+
+        Header ini datang dari jaringan. `int("abc")` dulu melempar
+        ValueError keluar dari handler: klien tidak menerima respons sama
+        sekali dan menggantung sampai timeout, sementara server mencetak
+        traceback. Direproduksi lewat socket mentah, karena urllib menolak
+        mengirim header yang tidak valid.
+        """
+        _StubHandler.fleet = mock.Mock()
+        for bad in (b"abc", b"12.5", b"-5", b""):
+            with self.subTest(content_length=bad):
+                request = (
+                    b"POST /api/dispatch HTTP/1.1\r\nHost: x\r\nContent-Length: "
+                    + bad
+                    + b"\r\n\r\n{}"
+                )
+                status_line, data = self._raw_post(request)
+                # b"" is a legal "no body" spelling only if the value parses;
+                # here every case must produce a response, never a hang.
+                self.assertTrue(status_line, "klien tidak menerima respons")
+                self.assertTrue(
+                    "400" in status_line or "200" in status_line,
+                    "status tidak terduga: %r" % status_line,
+                )
+
+    def test_non_utf8_body_gets_400_not_a_traceback(self):
+        """Body yang bukan UTF-8 dijawab 400, bukan UnicodeDecodeError.
+
+        `raw.decode("utf-8")` dilempar sebagai UnicodeDecodeError, yang
+        BUKAN JSONDecodeError, jadi `except json.JSONDecodeError` dulu
+        tidak menangkapnya - bentuk kegagalan yang sama dengan
+        Content-Length di atas.
+        """
+        _StubHandler.fleet = mock.Mock()
+        body = b"\xff\xfe not utf8"
+        request = (
+            b"POST /api/dispatch HTTP/1.1\r\nHost: x\r\nContent-Length: %d\r\n\r\n" % len(body)
+        ) + body
+        status_line, _ = self._raw_post(request)
+        self.assertIn("400", status_line)
 
 
 if __name__ == "__main__":

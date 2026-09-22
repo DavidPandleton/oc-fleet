@@ -1,0 +1,49 @@
+name: test
+
+on:
+  push:
+    branches: [master]
+  pull_request:
+    branches: [master]
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        # Verified locally on 3.11 (full suite) and 3.14 (import of every
+        # module). 3.9 is included because the code is written for it -
+        # `from __future__ import annotations` is present wherever PEP 585
+        # generics (`list[str]`) appear, including the dataclass in
+        # orchestrator.py where the annotation is evaluated at class
+        # creation time. That was a real gap: orchestrator.py used
+        # `list[str]` in a dataclass field without the future import, which
+        # raises TypeError on 3.9. Fixed before adding this matrix.
+        python-version: ["3.9", "3.11", "3.12"]
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+
+      - name: Install test dependency
+        run: python -m pip install --upgrade pytest
+
+      - name: Run the suite
+        run: python -m pytest -q
+
+      - name: Lint the example prompts in the README
+        # prompt_lint.py is itself part of the product. Running it over the
+        # example prompts in the README keeps the documented behaviour from
+        # drifting away from the real behaviour - the failure mode that made
+        # the negated-prompt false positives hard to spot.
+        #
+        # `--file README.md` is advisory only: the README contains prose
+        # that trips rules like NO-COMMIT-INSTRUCTION, which is a property
+        # of the document, not a defect. It must not fail the build.
+        run: |
+          python prompt_lint.py "Fix the parser in /tmp/p.py, then run pytest -q"
+          python prompt_lint.py --file README.md || true

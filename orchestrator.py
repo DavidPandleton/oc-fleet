@@ -13,6 +13,8 @@ default) until an outcome is set or the per-task timeout expires, so
 the runner never blocks forever.
 """
 
+from __future__ import annotations
+
 import time
 from dataclasses import dataclass, field
 

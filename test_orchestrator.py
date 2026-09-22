@@ -56,6 +56,7 @@ class FakeFleet:
         self.max_in_flight = 0
         self.dispatch_count_at_first_status = None
         self.fail_dispatch = False
+        self.fail_dispatch_with: BaseException | None = None
         self._outcomes = {}
         self._finished = set()
         self._next_idx = {}
@@ -66,6 +67,8 @@ class FakeFleet:
     def dispatch(self, prompt, workdir, title="", model=""):
         if self.fail_dispatch:
             raise OSError("boom")
+        if self.fail_dispatch_with is not None:
+            raise self.fail_dispatch_with
         session_id = "s-%d" % len(self.dispatched)
         self.dispatched.append(
             {"id": session_id, "prompt": prompt, "workdir": workdir, "title": title, "model": model}
@@ -552,6 +555,54 @@ class DispatchConfigTestCase(unittest.TestCase):
         self.assertEqual(results["a"]["status"], "failed")
         self.assertIsNone(results["a"]["session_id"])
         self.assertIn("dispatch failed", results["a"]["last_text"])
+
+    def test_dispatch_exception_outside_api_errors_does_not_crash_run(self):
+        """Exception di luar API_ERRORS tidak boleh menumbangkan run.
+
+        Cacat yang ditemukan review (review.md temuan #4) dan dikonfirmasi:
+        `_dispatch_ready` dulu hanya menangkap API_ERRORS, jadi RuntimeError
+        dari respons server yang rusak lolos dan membunuh run(), meninggalkan
+        task lain "running" selamanya. Suite tidak punya tes untuk ini -
+        `test_dispatch_error_marks_task_failed` hanya memakai OSError.
+        """
+        for exc in (
+            RuntimeError("malformed response"),
+            TypeError("unexpected shape"),
+            AttributeError("no attribute"),
+            Exception("anything at all"),
+        ):
+            with self.subTest(exc=type(exc).__name__):
+                fleet = FakeFleet()
+                fleet.fail_dispatch_with = exc
+                orch = make_orch(
+                    fleet,
+                    [Task(id="a", prompt="pa"), Task(id="b", prompt="pb")],
+                )
+                # Tidak boleh raise: run harus selesai.
+                orch.run()
+                results = orch.results()
+                for tid in ("a", "b"):
+                    self.assertEqual(results[tid]["status"], "failed")
+                    self.assertNotEqual(
+                        results[tid]["status"],
+                        "running",
+                        "task tidak boleh ditinggal dalam keadaan 'running'",
+                    )
+
+    def test_dispatch_failure_log_shows_reason_not_none(self):
+        """Log kegagalan dispatch menyebut sebabnya, bukan '(None)'."""
+        import contextlib
+        import io
+
+        fleet = FakeFleet()
+        fleet.fail_dispatch_with = OSError("connection refused")
+        orch = make_orch(fleet, [Task(id="a", prompt="pa")])
+        buf = io.StringIO()
+        with contextlib.redirect_stdout(buf):
+            orch.run()
+        output = buf.getvalue()
+        self.assertIn("connection refused", output)
+        self.assertNotIn("(None)", output)
 
     def test_fleet_is_lazily_created_when_not_provided(self):
         orch = Orchestrator(max_parallel=1)

@@ -19,17 +19,25 @@ from dataclasses import dataclass, field
 from fleet import Fleet
 
 FAILED_OUTCOMES = {"failed", "crashed", "error", "cancelled", "canceled"}
-# Exceptions raised by the fleet client that mean "this attempt failed", not
-# "the orchestrator is broken". The network failure space is too wide to
-# enumerate: ConnectionError and HTTPError are OSError subclasses, but
-# http.client.HTTPException (IncompleteRead, BadStatusLine) is NOT, and a
-# single one of those used to take the whole run down and strand every other
-# task in "running" forever.
-API_ERRORS = (OSError, ValueError, KeyError, ArithmeticError)
-# Everything else is treated the same way for polling purposes, because the
-# cost of a wrong guess is asymmetric: a crashed run strands live sessions,
-# whereas a wrongly-tolerated error only marks one attempt failed.
-POLL_ERRORS = Exception
+# Both call sites around a running session catch everything, for the same
+# reason. The cost of a wrong guess is asymmetric: a crashed run strands
+# live sessions in "running" that nothing will ever poll again, whereas a
+# wrongly-tolerated error only marks one attempt failed.
+#
+# The network failure space is too wide to enumerate. ConnectionError and
+# HTTPError are OSError subclasses, but http.client.HTTPException
+# (IncompleteRead, BadStatusLine) is not - and a malformed response now
+# leaves `dispatch` as a RuntimeError. Each of those, caught narrowly, used
+# to take the whole run down.
+#
+# This was two narrower constants (API_ERRORS for dispatch, POLL_ERRORS for
+# status). The dispatch one was the leak: it missed RuntimeError, so a bad
+# server response killed a run and abandoned siblings as "running". One
+# constant removes the chance of the two drifting apart again.
+RUN_ERRORS = Exception
+# Kept as the name the polling path reads; identical by construction.
+POLL_ERRORS = RUN_ERRORS
+DISPATCH_ERRORS = RUN_ERRORS
 POLL_INTERVAL = 3.0
 
 
@@ -248,7 +256,7 @@ class Orchestrator:
                 session_id = self.fleet.dispatch(
                     task.prompt, task.workdir, title=task.title or tid, model=task.model
                 )
-            except API_ERRORS as exc:
+            except DISPATCH_ERRORS as exc:
                 session_id = None
                 rec["last_text"] = "dispatch failed: %s" % exc
             rec["session_id"] = session_id
@@ -341,11 +349,16 @@ class Orchestrator:
             if timed_out:
                 print("failed: %s (timed out after %ss)" % (tid, task.timeout))
             else:
-                print(
-                    "failed: %s (%s)"
-                    % (tid, state.get("last_assistant_text") if isinstance(state, dict) else None
-                       or "no outcome")
-                )
+                # Prefer the recorded reason. A dispatch failure leaves
+                # `last_text` as "dispatch failed: ..." while `state` is the
+                # empty placeholder, so reading `state` alone printed
+                # "failed: a (None)" - the useful line was in the record the
+                # whole time.
+                reason = None
+                if isinstance(state, dict):
+                    reason = state.get("last_assistant_text")
+                reason = reason or rec.get("last_text") or "no outcome"
+                print("failed: %s (%s)" % (tid, reason))
         else:
             print("failed: %s (outcome %s)" % (tid, outcome))
 

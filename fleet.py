@@ -5,49 +5,10 @@ A fleet manager for OpenCode agents over HTTP API.
 
 import base64
 import json
-import os
-import re
 import urllib.error
 import urllib.request
 
-_PASSWORD_RE = re.compile(r"server password\s+(\S+)")
-
-_PASSWORD_SOURCES = [
-    "/tmp/oc_serve.log",
-    os.path.expanduser("~/.local/share/opencode/serve.log"),
-]
-_SERVICE_CONFIG = os.path.expanduser("~/.config/opencode/service.json")
-
-
-def _find_password(password_file=None):
-    """Locate the server password.
-
-    Order: $OPENCODE_SERVER_PASSWORD, an explicit password_file, the
-    well-known serve logs, then the service config. The serve log lives in
-    /tmp and can be wiped, so the durable copy and service.json are the
-    safety net.
-    """
-    env_pw = os.environ.get("OPENCODE_SERVER_PASSWORD")
-    if env_pw:
-        return env_pw
-    candidates = [password_file] if password_file else []
-    candidates += _PASSWORD_SOURCES
-    for cand in candidates:
-        if not cand:
-            continue
-        try:
-            with open(cand, encoding="utf-8") as fh:
-                content = fh.read()
-        except OSError:
-            continue
-        match = _PASSWORD_RE.search(content)
-        if match:
-            return match.group(1)
-    try:
-        with open(_SERVICE_CONFIG, encoding="utf-8") as fh:
-            return json.load(fh).get("password") or None
-    except (OSError, ValueError):
-        return None
+import endpoint
 
 
 class Fleet:
@@ -57,10 +18,27 @@ class Fleet:
     alongside a utility to sanitize agent output.
     """
 
-    def __init__(self, base_url="http://127.0.0.1:4096", password_file=None):
-        self.base_url = base_url.rstrip("/")
+    def __init__(self, base_url=None, password_file=None, discover_endpoint=None):
+        """Buat klien.
+
+        Kalau `base_url` tidak diberikan, alamat dan password DITEMUKAN
+        otomatis lewat `endpoint.discover()`: perintah `opencode serve
+        --service` mengikat ke port acak dan tidak menuliskannya ke file
+        mana pun, jadi default tetap `http://127.0.0.1:4096` salah hampir
+        selalu. Itu dulu membuat setiap panggilan gagal dengan 401 sampai
+        seseorang mengoper `--base-url` dengan tangan.
+
+        `discover_endpoint` hanya untuk pengujian: menggantikan fungsi
+        penemuan supaya unit test tidak menyentuh jaringan.
+        """
+        penemu = discover_endpoint or endpoint.discover
+        hasil = penemu(base_url=base_url, password_file=password_file)
+        self.base_url = hasil["base_url"].rstrip("/")
+        self.endpoint_source = hasil.get("source")
+        self.endpoint_verified = hasil.get("verified", False)
         self.headers = {"Content-Type": "application/json"}
-        password = _find_password(password_file)
+        password = hasil.get("password")
+        self.password_source = hasil.get("pw_source")
         if password:
             self.headers["Authorization"] = (
                 "Basic " + base64.b64encode(f"opencode:{password}".encode()).decode()

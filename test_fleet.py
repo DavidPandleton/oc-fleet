@@ -8,6 +8,7 @@ import unittest
 from unittest import mock
 
 import fleet
+import endpoint
 from fleet import Fleet
 
 
@@ -37,11 +38,24 @@ class FleetTestCase(unittest.TestCase):
         self.assertEqual(fleet.headers["Authorization"], expected)
 
     def test_auth_header_absent_without_password_file(self):
+        """Tanpa kredensial di mana pun, tidak ada header Authorization.
+
+        Sejak penemuan endpoint dipindah ke endpoint.py, tes ini mengunci
+        `endpoint.password_candidates` ke daftar kosong. Sebelumnya ia
+        menambal `fleet._PASSWORD_SOURCES`, yang sudah tidak ada.
+        """
         with mock.patch.dict(os.environ, {}, clear=True), mock.patch.object(
-            fleet, "_PASSWORD_SOURCES", ["/nonexistent"]
-        ):
-            with mock.patch.object(fleet, "_SERVICE_CONFIG", "/nonexistent.json"):
-                f = Fleet(base_url="http://127.0.0.1:4096", password_file="/nonexistent")
+            endpoint, "password_candidates", return_value=[]
+        ), mock.patch.object(endpoint, "discover", return_value={
+            "base_url": "http://127.0.0.1:4096",
+            "password": None,
+            "pw_source": None,
+            "source": "test",
+            "verified": True,
+            "candidates": [],
+            "pw_tried": 0,
+        }):
+            f = Fleet(base_url="http://127.0.0.1:4096", password_file="/nonexistent")
         self.assertNotIn("Authorization", f.headers)
         self.assertEqual(f.headers.get("Content-Type"), "application/json")
 

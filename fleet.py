@@ -5,6 +5,7 @@ A fleet manager for OpenCode agents over HTTP API.
 
 import base64
 import json
+import time
 import urllib.error
 import urllib.request
 
@@ -142,8 +143,69 @@ class Fleet:
         self._request("POST", f"/api/session/{session_id}/prompt", {"text": task})
         return session_id
 
+    # Berapa lama sebuah tool boleh berstatus "running" sebelum dianggap
+    # macet. Tool yang benar-benar bekerja selesai dalam detik sampai
+    # puluhan detik; 300 detik jauh di atas itu dan masih di bawah timeout
+    # task yang lazim, jadi pemanggil diberi tahu jauh sebelum menyerah.
+    STUCK_AFTER_SECONDS = 300.0
+
+    @staticmethod
+    def _tool_activity(messages, now_ms=None):
+        """Ringkas keadaan tool call: berapa yang jalan, sejak kapan.
+
+        Mengembalikan dict:
+            tool_running   - jumlah tool berstatus "running"
+            stuck_seconds  - umur tool running paling tua, atau None
+            stuck          - apakah melewati STUCK_AFTER_SECONDS
+        """
+        if now_ms is None:
+            now_ms = time.time() * 1000
+        umur_tertua = None
+        jumlah = 0
+        for message in messages:
+            if not isinstance(message, dict):
+                continue
+            content = message.get("content")
+            if not isinstance(content, list):
+                continue
+            for item in content:
+                if not isinstance(item, dict) or item.get("type") != "tool":
+                    continue
+                state = item.get("state")
+                status = state.get("status") if isinstance(state, dict) else None
+                if status != "running":
+                    continue
+                jumlah += 1
+                waktu = item.get("time")
+                dibuat = waktu.get("created") if isinstance(waktu, dict) else None
+                if isinstance(dibuat, (int, float)):
+                    umur = (now_ms - dibuat) / 1000.0
+                    if umur_tertua is None or umur > umur_tertua:
+                        umur_tertua = umur
+        macet = umur_tertua is not None and umur_tertua > Fleet.STUCK_AFTER_SECONDS
+        return {
+            "tool_running": jumlah,
+            "stuck_seconds": umur_tertua,
+            "stuck": macet,
+        }
+
     def status(self, session_id):
-        """Return the outcome and last assistant text for a session."""
+        """Return the outcome, last assistant text, and liveness for a session.
+
+        Selain `outcome` dan `last_assistant_text`, hasilnya memuat:
+
+            tool_running  - jumlah tool call yang masih berstatus "running"
+            stuck_seconds - umur tool running paling tua, dalam detik
+            stuck         - True kalau melewati STUCK_AFTER_SECONDS
+
+        Kenapa perlu: pada sesi nyata di mesin ini, tiga agent berhenti
+        dengan tool call berstatus "running" dan `executed: false` yang
+        TIDAK PERNAH selesai. `outcome` tetap None, jadi orchestrator
+        menunggu sampai timeout task penuh (25 menit dalam kasus itu) tanpa
+        cara membedakan "masih bekerja" dari "sudah mati". `stuck` memberi
+        sinyal itu, sehingga pemanggil bisa menyerah lebih awal dan
+        menyebut sebabnya.
+        """
         response = self._request("GET", f"/api/session/{session_id}/message")
         messages = self._unwrap(response)
         if not isinstance(messages, list):
@@ -166,7 +228,9 @@ class Fleet:
                 # `last_text` did not, so an em-dash from an agent leaked
                 # into both. Doing it here covers every consumer.
                 last_text = self.sanitize(assistant_text)
-        return {"outcome": outcome, "last_assistant_text": last_text}
+        hasil = {"outcome": outcome, "last_assistant_text": last_text}
+        hasil.update(self._tool_activity(messages))
+        return hasil
 
     def cancel(self, session_id):
         """Stop a running session. Tri-state return.

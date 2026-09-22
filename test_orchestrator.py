@@ -57,6 +57,7 @@ class FakeFleet:
         self.dispatch_count_at_first_status = None
         self.fail_dispatch = False
         self.fail_dispatch_with: BaseException | None = None
+        self.stuck_sessions = set()
         self._outcomes = {}
         self._finished = set()
         self._next_idx = {}
@@ -86,6 +87,19 @@ class FakeFleet:
         self._next_idx[session_id] = index + 1
         outcome = self._outcome_for(session_id, index)
         if outcome is None:
+            # `stuck_sessions` meniru sesi nyata yang tool call-nya
+            # berstatus "running" dan tidak pernah selesai: outcome tetap
+            # None, tapi status() menandai `stuck`. Dipakai tes yang
+            # memastikan orchestrator menyerah karena sinyal itu, bukan
+            # menunggu deadline penuh.
+            if session_id in self.stuck_sessions:
+                return {
+                    "outcome": None,
+                    "last_assistant_text": None,
+                    "tool_running": 2,
+                    "stuck_seconds": 1244.0,
+                    "stuck": True,
+                }
             return {"outcome": None, "last_assistant_text": None}
         self._finished.add(session_id)
         self.events.append(("finish", session_id))
@@ -738,6 +752,88 @@ class SelfLoopTestCase(unittest.TestCase):
         with self.assertRaises(ValueError) as ctx:
             orch.validate()
         self.assertIn("cycle", str(ctx.exception))
+
+
+class StuckDetectionTestCase(unittest.TestCase):
+    """Sesi yang berhenti harus menghentikan task, bukan menunggu deadline.
+
+    Regresi untuk kegagalan nyata: tiga agent berhenti dengan tool call
+    berstatus "running" dan `executed: false` yang tidak pernah selesai.
+    `outcome` tetap None, jadi sebelum ini task menunggu sampai deadline
+    penuh - 1500 detik pada kasus itu - lalu melaporkan "timeout", padahal
+    keadaannya sama sekali lain.
+    """
+
+    def test_stuck_session_fails_fast_instead_of_waiting(self):
+        fleet = FakeFleet()
+        orch = make_orch(fleet, [Task(id="t1", prompt="x", workdir="/w", timeout=1500)])
+        fleet.stuck_sessions.add("s-0")
+        started = time.monotonic()
+        orch.run()
+        elapsed = time.monotonic() - started
+        rec = orch.results()["t1"]
+        # Deadline 1500s; kalau macet terdeteksi, selesai dalam hitungan poll.
+        self.assertLess(elapsed, 5.0)
+        self.assertEqual(rec["status"], "failed")
+        # Satu poll cukup: sinyalnya langsung terlihat, tidak perlu menunggu.
+        self.assertEqual(fleet.status_calls, 1)
+
+    def test_stuck_reason_is_reported(self):
+        fleet = FakeFleet()
+        orch = make_orch(fleet, [Task(id="t1", prompt="x", workdir="/w", timeout=1500)])
+        fleet.stuck_sessions.add("s-0")
+        orch.run()
+        text = orch.results()["t1"]["last_text"]
+        self.assertIn("stuck", text)
+        self.assertIn("1244", text)
+
+    def test_stuck_does_not_mark_success(self):
+        """Macet bukan sukses, seberapa pun lama menunggu."""
+        fleet = FakeFleet()
+        orch = make_orch(fleet, [Task(id="t1", prompt="x", workdir="/w", timeout=1500)])
+        fleet.stuck_sessions.add("s-0")
+        orch.run()
+        self.assertNotEqual(orch.results()["t1"]["status"], "succeeded")
+
+    def test_stuck_with_retries_uses_retry_budget(self):
+        """Task yang macet tetap punya kesempatan retry, lalu menyerah."""
+        fleet = FakeFleet()
+        task = Task(id="t1", prompt="x", workdir="/w", timeout=1500, retries=1)
+        orch = make_orch(fleet, [task])
+        # Kedua attempt macet (semua sesi macet).
+        for i in range(4):
+            fleet.stuck_sessions.add("s-%d" % i)
+        orch.run()
+        rec = orch.results()["t1"]
+        self.assertEqual(rec["status"], "failed")
+        self.assertEqual(rec["attempts"], 2)
+
+    def test_non_stuck_none_outcome_still_waits_for_deadline(self):
+        """Tanpa sinyal macet, perilaku lama dipertahankan: tunggu deadline.
+
+        Penting supaya deteksi macet tidak berubah menjadi "menyerah pada
+        outcome None pertama" - sesi yang sehat memang melaporkan None
+        selama beberapa poll pertama.
+        """
+        fleet = FakeFleet()
+        orch = make_orch(fleet, [Task(id="t1", prompt="x", workdir="/w", timeout=1500)])
+        # Tidak ada stuck_sessions: outcome tetap None selamanya.
+        pending = {"t1"}
+        running = {
+            "t1": {
+                "session_id": "s-0",
+                "deadline": time.monotonic() + 9999,
+                "last_state": {"outcome": None, "last_assistant_text": None},
+            }
+        }
+        orch._poll_running(pending, running)
+        # Belum selesai: task dikembalikan ke `running` untuk poll berikutnya,
+        # dan hasilnya TIDAK ditandai selesai - _finish_attempt tidak
+        # dipanggil, jadi status tetap seperti sebelum poll.
+        self.assertIn("t1", running)
+        self.assertEqual(running["t1"]["session_id"], "s-0")
+        self.assertEqual(orch.results()["t1"]["status"], "pending")
+        self.assertIsNone(orch.results()["t1"]["finished_at"])
 
 
 if __name__ == "__main__":

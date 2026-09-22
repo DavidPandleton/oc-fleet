@@ -333,6 +333,29 @@ class Orchestrator:
             if state.get("outcome") is not None:
                 self._finish_attempt(tid, state, pending)
                 continue
+            if state.get("stuck"):
+                # Sesi berhenti: tool call berstatus "running" yang tidak
+                # pernah selesai dan sudah terlalu lama. Tanpa cabang ini,
+                # `outcome` tetap None dan task menunggu sampai deadline
+                # penuh - 25 menit pada kegagalan nyata di mesin ini - tanpa
+                # ada cara membedakan "masih bekerja" dari "sudah mati".
+                #
+                # Diperlakukan sebagai timeout, bukan sukses: hasilnya
+                # memang tidak ada. Menandai `timed_out` membuat jalur
+                # retry/skip yang sudah ada ikut berlaku.
+                detik = state.get("stuck_seconds")
+                detail = (
+                    "stuck: %d tool berjalan, paling tua %.0f detik"
+                    % (state.get("tool_running", 0), detik)
+                    if isinstance(detik, (int, float))
+                    else "stuck: tool tidak selesai"
+                )
+                if state.get("last_assistant_text") is None:
+                    state = dict(state)
+                    state["last_assistant_text"] = detail
+                print("stuck: %s (%s)" % (tid, detail))
+                self._finish_attempt(tid, state, pending, timed_out=True)
+                continue
             if time.monotonic() >= info["deadline"]:
                 # Deadline expired with no outcome: only NOW is it a timeout.
                 self._finish_attempt(tid, state, pending, timed_out=True)

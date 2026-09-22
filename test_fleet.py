@@ -260,7 +260,13 @@ class FleetTestCase(unittest.TestCase):
             with self.subTest(payload=payload):
                 urlopen.return_value = _context(payload)
                 result = self.fleet.status("s-1")
-                self.assertEqual(result, {"outcome": None, "last_assistant_text": None})
+                # status() kini juga memuat kunci keaktifan tool. Yang
+                # penting di sini adalah tidak melempar dan tidak
+                # mengarang teks; bukan kesamaan dict secara harfiah.
+                self.assertIsNone(result["outcome"])
+                self.assertIsNone(result["last_assistant_text"])
+                self.assertEqual(result["tool_running"], 0)
+                self.assertFalse(result["stuck"])
 
     @mock.patch("urllib.request.urlopen")
     def test_status_still_reads_well_formed_messages(self, urlopen):
@@ -306,6 +312,100 @@ class FleetTestCase(unittest.TestCase):
         self.assertNotIn("\u2014", text)
         self.assertNotIn("\u2013", text)
         self.assertEqual(text, "bagus - tapi - perlu fix")
+
+    @mock.patch("urllib.request.urlopen")
+    def test_status_reports_stuck_tool(self, urlopen):
+        """Tool yang berstatus running terlalu lama ditandai macet.
+
+        Regresi untuk kegagalan nyata: tiga agent berhenti dengan tool call
+        `status: running`, `executed: false`, yang tidak pernah selesai.
+        `outcome` tetap None, jadi pemanggil menunggu sampai timeout penuh
+        (25 menit pada kasus itu) tanpa bisa membedakan "masih bekerja" dari
+        "sudah mati".
+        """
+        sekarang = 1_790_084_000_000
+        lama = sekarang - int(Fleet.STUCK_AFTER_SECONDS * 1000) - 60_000
+        urlopen.return_value = _context(
+            {
+                "data": [
+                    {
+                        "type": "message",
+                        "info": {"role": "assistant"},
+                        "content": [
+                            {
+                                "type": "tool",
+                                "name": "read",
+                                "executed": False,
+                                "state": {"status": "running"},
+                                "time": {"created": lama},
+                            }
+                        ],
+                    }
+                ]
+            }
+        )
+        with mock.patch("fleet.time.time", return_value=sekarang / 1000.0):
+            result = self.fleet.status("s-1")
+        self.assertEqual(result["tool_running"], 1)
+        self.assertTrue(result["stuck"])
+        self.assertGreaterEqual(result["stuck_seconds"], Fleet.STUCK_AFTER_SECONDS)
+
+    @mock.patch("urllib.request.urlopen")
+    def test_status_fresh_tool_is_not_stuck(self, urlopen):
+        """Tool yang baru mulai belum dianggap macet."""
+        sekarang = 1_790_084_000_000
+        baru = sekarang - 5_000
+        urlopen.return_value = _context(
+            {
+                "data": [
+                    {
+                        "type": "message",
+                        "info": {"role": "assistant"},
+                        "content": [
+                            {
+                                "type": "tool",
+                                "name": "read",
+                                "state": {"status": "running"},
+                                "time": {"created": baru},
+                            }
+                        ],
+                    }
+                ]
+            }
+        )
+        with mock.patch("fleet.time.time", return_value=sekarang / 1000.0):
+            result = self.fleet.status("s-1")
+        self.assertEqual(result["tool_running"], 1)
+        self.assertFalse(result["stuck"])
+
+    @mock.patch("urllib.request.urlopen")
+    def test_status_completed_tools_are_not_stuck(self, urlopen):
+        """Tool yang selesai tidak pernah dihitung sebagai macet."""
+        sekarang = 1_790_084_000_000
+        sangat_lama = sekarang - 9_999_999
+        urlopen.return_value = _context(
+            {
+                "data": [
+                    {
+                        "type": "message",
+                        "info": {"role": "assistant"},
+                        "content": [
+                            {
+                                "type": "tool",
+                                "name": "shell",
+                                "state": {"status": "completed"},
+                                "time": {"created": sangat_lama, "completed": sangat_lama + 100},
+                            }
+                        ],
+                    }
+                ]
+            }
+        )
+        with mock.patch("fleet.time.time", return_value=sekarang / 1000.0):
+            result = self.fleet.status("s-1")
+        self.assertEqual(result["tool_running"], 0)
+        self.assertFalse(result["stuck"])
+        self.assertIsNone(result["stuck_seconds"])
 
 
 if __name__ == "__main__":

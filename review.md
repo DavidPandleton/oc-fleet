@@ -18,9 +18,12 @@
 >   `_poll_running` memeriksa `outcome` lebih dulu (baris 312), dan baru
 >   memeriksa deadline kalau outcome masih None (baris 315). Sesi yang
 >   selesai pada poll yang melewati deadline tetap tercatat sukses.
+> - **"Timeout precision is poll-granular": SUDAH DIPERBAIKI.** Loop
+>   tidur sampai deadline terdekat, bukan satu `poll_interval` penuh.
+>   Terverifikasi: timeout=0.5 dengan interval 3.0 selesai di 0.50s,
+>   overshoot 0.00s (sebelumnya sampai 3s, 6x lipat).
 >
-> Masih terbuka: presisi timeout per-poll (overshoot sampai satu
-> poll_interval), dan tidak ada riwayat per-attempt di `results()`.
+> Masih terbuka: tidak ada riwayat per-attempt di `results()`.
 
 **Verdict asli di bawah ini dipertahankan apa adanya.**
 

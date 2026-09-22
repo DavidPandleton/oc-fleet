@@ -408,10 +408,24 @@ class Orchestrator:
         """Return the results dict: task_id -> {status, session_id, outcome,
         attempts, last_text, started_at, finished_at, duration}.
 
-        Returns a deep copy. This used to hand back the live internal dict, so a
+        Returns a copy. This used to hand back the live internal dict, so a
         caller doing `results()["a"]["status"] = "done"` silently corrupted
         orchestrator state and the next sweep's decisions were made on a
-        doctored record. Cheap insurance: the dict is one row per task.
+        doctored record. A per-row `dict(rec)` is enough because every field
+        is a primitive (str/int/float/None), so there is nothing nested to
+        share; the copy isolates the rows, which is the property that
+        matters.
+
+        Two fields span the whole task, not one attempt, which is worth
+        knowing when reading a row from a retried task:
+
+        * ``duration`` is measured from the *first* attempt's start
+          (``started_at`` is set once, and never reset), so it includes the
+          backoff between attempts.
+        * ``session_id`` and ``outcome`` describe only the *final* attempt.
+          The session id of a superseded attempt is not recorded, so there
+          is no per-attempt history to reconstruct what earlier attempts
+          did.
         """
         return {tid: dict(rec) for tid, rec in self._results.items()}
 

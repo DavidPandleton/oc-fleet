@@ -26,6 +26,17 @@ from datetime import datetime, timezone
 from fleet import Fleet
 
 API_ERRORS = (OSError, json.JSONDecodeError, KeyError)
+# Sengaja tetap sempit di sini, dan itu berbeda dari orchestrator/waiter.
+#
+# `main()` adalah batas teratas program interaktif. Sebuah exception di
+# luar daftar ini berarti ada bug di oc-fleet sendiri, bukan gangguan
+# jaringan. Menelannya jadi "api/connection failure" akan menyembunyikan
+# bug itu. Traceback di terminal adalah sinyal debugging yang berguna.
+#
+# Proses latar (orchestrator, oc-fleet-wait) berlawanan: mereka jalan
+# tanpa yang menonton, jadi biaya salah tebak itu asimetris dan mereka
+# menangkap Exception. Di sini, kebalikannya yang benar.
+#
 FAILED_OUTCOMES = {"failed", "crashed", "error", "cancelled", "canceled"}
 SSE_POLL_SECONDS = 1.0
 STATUS_FETCH_LIMIT = 20

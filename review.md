@@ -14,9 +14,13 @@
 >   `_finish_attempt` sebelum retry (orchestrator.py:342).
 > - **"fleet.py exposes no cancel API at all": SUDAH TIDAK BENAR.**
 >   `Fleet.cancel` ada di fleet.py:175, tri-state True/False/None.
+> - **"Deadline dicek sebelum status baru dibaca": SUDAH TIDAK BENAR.**
+>   `_poll_running` memeriksa `outcome` lebih dulu (baris 312), dan baru
+>   memeriksa deadline kalau outcome masih None (baris 315). Sesi yang
+>   selesai pada poll yang melewati deadline tetap tercatat sukses.
 >
-> Masih terbuka: presisi timeout per-poll, deadline dicek sebelum status
-> baru dibaca, dan status `running` yang tidak punya riwayat per-attempt.
+> Masih terbuka: presisi timeout per-poll (overshoot sampai satu
+> poll_interval), dan tidak ada riwayat per-attempt di `results()`.
 
 **Verdict asli di bawah ini dipertahankan apa adanya.**
 

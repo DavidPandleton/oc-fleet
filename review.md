@@ -1,5 +1,25 @@
 # Cross-model review: `orchestrator.py` / `test_orchestrator.py`
 
+> **Status per 2026-09-22.** Dokumen ini adalah snapshot review pada saat
+> ditulis, dan sengaja tidak ditimpa - temuan aslinya berharga sebagai
+> catatan. Tiga hal di bawah sudah diperbaiki setelahnya, jadi baca
+> verdict-nya dengan koreksi ini:
+>
+> - **#4 (crash + abandoned work): SUDAH DIPERBAIKI.** `dispatch` dan
+>   `status` sekarang memakai satu konstanta `RUN_ERRORS = Exception`.
+>   Sebelumnya `dispatch` pakai `API_ERRORS` yang lebih sempit dan bocor.
+>   Direproduksi dan diverifikasi tertutup. Test gap-nya juga ditutup
+>   (RuntimeError, TypeError, AttributeError, Exception generik).
+> - **Cancel sebelum retry: SUDAH ADA.** `_cancel_session` dipanggil di
+>   `_finish_attempt` sebelum retry (orchestrator.py:342).
+> - **"fleet.py exposes no cancel API at all": SUDAH TIDAK BENAR.**
+>   `Fleet.cancel` ada di fleet.py:175, tri-state True/False/None.
+>
+> Masih terbuka: presisi timeout per-poll, deadline dicek sebelum status
+> baru dibaca, dan status `running` yang tidak punya riwayat per-attempt.
+
+**Verdict asli di bawah ini dipertahankan apa adanya.**
+
 Scope: the six failure modes requested. Every claim below was checked against the
 source and, where marked **(probe)**, reproduced by executing the code against the
 real `orchestrator.py` (commit `c11c9b7`, branch `master`; suite: 28 tests, all pass).

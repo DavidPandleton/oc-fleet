@@ -117,6 +117,22 @@ class TestDispatch(CliBase):
         with self.assertRaises(SystemExit):
             self.parser.parse_args(["dispatch", "--workdir", "/tmp/wd"])
 
+    @mock.patch("cli.Fleet")
+    def test_dispatch_bad_model_exits_2_without_traceback(self, fleet_cls):
+        """Model salah ketik harus jadi pesan jelas, bukan traceback.
+
+        ValueError dari _parse_model() adalah kesalahan pengguna, jadi
+        ditangani di cmd_dispatch - bukan lewat API_ERRORS, karena
+        'api/connection failure' akan menyesatkan.
+        """
+        fleet = fleet_cls.return_value
+        fleet.dispatch.side_effect = ValueError("model is missing a provider: '/foo'")
+        with mock.patch("sys.stderr", new_callable=io.StringIO) as err:
+            code = self.run_cli("dispatch", "TASK", "--workdir", "/tmp/wd", "--model", "/foo")
+        self.assertEqual(code, 2)
+        self.assertIn("model is missing a provider", err.getvalue())
+        self.assertNotIn("api/connection failure", err.getvalue())
+
 
 class TestSessions(CliBase):
     @mock.patch("cli.Fleet")

@@ -157,7 +157,13 @@ def cmd_status(args):
 
 def cmd_dispatch(args):
     fleet = make_fleet(args)
-    session_id = fleet.dispatch(args.task, args.workdir, title=args.title, model=args.model)
+    try:
+        session_id = fleet.dispatch(args.task, args.workdir, title=args.title, model=args.model)
+    except ValueError as exc:
+        # Kesalahan format model dari pengguna, bukan kegagalan API. Pesannya
+        # sudah menjelaskan apa yang salah, jadi tampilkan apa adanya.
+        print("error: %s" % exc, file=sys.stderr)
+        return 2
     print("dispatched: %s" % session_id)
     if args.detach:
         waiter = os.path.join(os.path.dirname(os.path.abspath(__file__)), "oc-fleet-wait.py")

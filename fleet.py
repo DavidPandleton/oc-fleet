@@ -165,6 +165,11 @@ class Fleet:
         outcome = None
         last_text = None
         for message in messages:
+            # Entries are not guaranteed to be objects; a bare string or null
+            # in `data` made `message.get` raise AttributeError. Skip them
+            # rather than failing the whole status read.
+            if not isinstance(message, dict):
+                continue
             if message.get("type") == "idle" and message.get("outcome"):
                 outcome = message["outcome"]
             assistant_text = self._assistant_text(message)
@@ -241,15 +246,33 @@ class Fleet:
 
     @staticmethod
     def _assistant_text(message):
+        # Every `.get` here is guarded. The server has been observed to send
+        # entries that are not objects (`null`, bare strings, numbers) inside
+        # the `data` list, and `content` entries that are plain strings rather
+        # than `{"type": ..., "text": ...}` objects. One unguarded `.get`
+        # raised AttributeError out of `status()`, which callers like
+        # `oc-fleet show` do not catch.
+        if not isinstance(message, dict):
+            return None
         if message.get("type") != "message":
             return None
-        role = message.get("info", {}).get("role")
+        info = message.get("info")
+        role = info.get("role") if isinstance(info, dict) else None
         if role not in ("assistant", "user"):
             return None
+        content = message.get("content")
+        if not isinstance(content, list):
+            return None
         parts = []
-        for part in message.get("content", []):
+        for part in content:
+            if not isinstance(part, dict):
+                continue
             if part.get("type") in ("text", "reasoning"):
-                parts.append(part.get("text", ""))
+                text = part.get("text")
+                # `text` can be a non-string (or missing) on malformed input.
+                # Joining a non-string raised TypeError on the `"\n".join`.
+                if isinstance(text, str):
+                    parts.append(text)
         if not parts:
             return None
         return "\n".join(parts)

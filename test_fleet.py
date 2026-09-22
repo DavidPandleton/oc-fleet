@@ -214,6 +214,59 @@ class FleetTestCase(unittest.TestCase):
         self.assertEqual(Fleet.sanitize("a \u2014 b \u2013 c"), "a - b - c")
         self.assertEqual(Fleet.sanitize("already clean"), "already clean")
 
+    @mock.patch("urllib.request.urlopen")
+    def test_status_survives_malformed_message_shapes(self, urlopen):
+        """status() tidak crash saat bentuk respons tidak sesuai harapan.
+
+        Server pernah mengirim entri bukan-objek (null, string, angka) di
+        dalam `data`, dan entri `content` berupa string biasa. Satu `.get`
+        tanpa penjagaan melempar AttributeError keluar dari status(), yang
+        tidak ditangkap pemakai seperti `oc-fleet show`.
+
+        Ditemukan dengan menguji tujuh bentuk rusak; semuanya dulu crash.
+        """
+        malformed = [
+            {"data": "bukan list"},
+            {"data": [None, "str", 42]},
+            {"data": [{}]},
+            {"data": [{"type": "message", "info": None}]},
+            {"data": [{"type": "message", "info": {"role": "assistant"}, "content": "str"}]},
+            {"data": [{"type": "message", "info": {"role": "assistant"}, "content": ["str", None]}]},
+            {
+                "data": [
+                    {
+                        "type": "message",
+                        "info": {"role": "assistant"},
+                        "content": [{"type": "text", "text": 123}],
+                    }
+                ]
+            },
+        ]
+        for payload in malformed:
+            with self.subTest(payload=payload):
+                urlopen.return_value = _context(payload)
+                result = self.fleet.status("s-1")
+                self.assertEqual(result, {"outcome": None, "last_assistant_text": None})
+
+    @mock.patch("urllib.request.urlopen")
+    def test_status_still_reads_well_formed_messages(self, urlopen):
+        """Penjagaan tidak merusak pembacaan normal."""
+        urlopen.return_value = _context(
+            {
+                "data": [
+                    {
+                        "type": "message",
+                        "info": {"role": "assistant"},
+                        "content": [{"type": "text", "text": "halo"}],
+                    },
+                    {"type": "idle", "outcome": "done"},
+                ]
+            }
+        )
+        result = self.fleet.status("s-1")
+        self.assertEqual(result["outcome"], "done")
+        self.assertEqual(result["last_assistant_text"], "halo")
+
 
 if __name__ == "__main__":
     unittest.main()

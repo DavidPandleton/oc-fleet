@@ -94,6 +94,41 @@ class FleetTestCase(unittest.TestCase):
         urlopen.assert_not_called()
 
     @mock.patch("urllib.request.urlopen")
+    def test_dispatch_response_without_id_is_named(self, urlopen):
+        """Respons tanpa `id` harus menyebut panggilannya, bukan KeyError buta.
+
+        Perilaku lama: `session["id"]` meledak dengan `KeyError: 'id'`
+        yang tidak menyebut panggilan mana, atau bentuk apa yang datang.
+        Sekarang pesannya menyebut endpoint dan tipe yang diterima.
+        """
+        for body in ({"data": None}, {}, [], {"id": ""}):
+            urlopen.side_effect = [_context(body)]
+            with self.subTest(body=body), self.assertRaises(RuntimeError) as ctx:
+                self.fleet.dispatch("hello", "/tmp/wd")
+            self.assertIn("/api/session", str(ctx.exception))
+
+    @mock.patch("urllib.request.urlopen")
+    def test_dispatch_rejects_empty_workdir(self, urlopen):
+        """workdir kosong ditolak di depan, bukan bikin sesi salah lokasi.
+
+        Server menerima `location.directory` kosong, jadi sesi dibuat dan
+        kegagalannya baru muncul saat agent menulis berkas pertama. Ditolak
+        di sini supaya penyebabnya kelihatan.
+        """
+        for bad in ("", "   ", None):
+            with self.subTest(workdir=bad), self.assertRaises(ValueError):
+                self.fleet.dispatch("hello", bad)
+        urlopen.assert_not_called()
+
+    @mock.patch("urllib.request.urlopen")
+    def test_dispatch_rejects_empty_task(self, urlopen):
+        """Tugas kosong ditolak di depan, bukan mengirim prompt hampa."""
+        for bad in ("", "   ", None):
+            with self.subTest(task=bad), self.assertRaises(ValueError):
+                self.fleet.dispatch(bad, "/tmp/wd")
+        urlopen.assert_not_called()
+
+    @mock.patch("urllib.request.urlopen")
     def test_status_outcome(self, urlopen):
         messages = {
             "data": [

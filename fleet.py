@@ -123,14 +123,35 @@ class Fleet:
         return {"providerID": provider, "id": model_id}
 
     def dispatch(self, task, workdir, title="", model=""):
-        """Create a session, post the task prompt, and return its session id."""
+        """Create a session, post the task prompt, and return its session id.
+
+        Both arguments are validated before any HTTP call, because the
+        server accepts a bad value and only fails much later:
+
+        * an empty ``workdir`` creates a session rooted at the wrong place,
+          and the first file the agent writes lands somewhere unintended;
+        * a response without an ``id`` used to surface as a bare
+          ``KeyError: 'id'``, which names neither the call nor the shape
+          that came back.
+
+        Both raise here instead, so the failure points at the cause.
+        """
+        if not isinstance(task, str) or not task.strip():
+            raise ValueError(f"task must be non-empty text, got {task!r}")
+        if not isinstance(workdir, str) or not workdir.strip():
+            raise ValueError(f"workdir must be non-empty text, got {workdir!r}")
+
         body = {"title": title, "location": {"directory": workdir}}
         if model:
             parsed = self._parse_model(model)
             if parsed is not None:
                 body["model"] = parsed
-        session = self._request("POST", "/api/session", body)
-        session = self._unwrap(session) or {}
+        session = self._unwrap(self._request("POST", "/api/session", body))
+        if not isinstance(session, dict) or not session.get("id"):
+            raise RuntimeError(
+                "POST /api/session did not return a session id; "
+                f"got {type(session).__name__} {session!r}"
+            )
         session_id = session["id"]
         self._request("POST", f"/api/session/{session_id}/prompt", {"text": task})
         return session_id

@@ -27,7 +27,7 @@ delegation - ini spesifik OpenCode, lewat HTTP API-nya.
         |                          |                           |
    +---------+              +--------------+            +--------------+
    | cli.py  |              |oc-fleet-wait |            | prompt_lint  |
-   |  (348)  |              |    .py (117) |            |    .py (324) |
+   |  (348)  |              |    .py (117) |            |    .py (415) |
    +---------+              +--------------+            +--------------+
         |                          |                           |
         +--------------------------+---------------------------+
@@ -43,7 +43,7 @@ Intinya: **satu client HTTP (`Fleet`), empat cara memakainya.**
 
 ## 2. Lima bagian, dan apa yang sebenarnya mereka lakukan
 
-### `fleet.py` - client HTTP (233 baris)
+### `fleet.py` - client HTTP (254 baris)
 
 Semua yang bicara ke server OpenCode ada di sini. Tidak ada yang lain yang
 memanggil HTTP langsung.
@@ -96,7 +96,7 @@ status | dispatch | watch | sessions | show | stats
 format ditangkap dan dicetak sebagai pesan bersih, **bukan** lewat
 `API_ERRORS` global - karena itu kesalahan pengguna, bukan kegagalan API.
 
-### `orchestrator.py` - DAG runner (411 baris)
+### `orchestrator.py` - DAG runner (423 baris)
 
 Ini bagian paling berisi. Dua kelas:
 
@@ -160,7 +160,7 @@ do_POST  /api/dispatch  form dispatch dari browser
 
 Refresh tabel tiap 5 detik, plus completion live lewat SSE.
 
-### `prompt_lint.py` - linter prompt (324 baris)
+### `prompt_lint.py` - linter prompt (415 baris)
 
 Bukan sekadar cek gaya. Aturannya **berbasis pengukuran** dari 16 probe
 terkontrol - jadi ini catatan empiris tentang bagaimana agent gagal.
@@ -217,10 +217,11 @@ File `.txt` di `/tmp` itu dari versi lama (20 Sep), sisa usang.
       |
       +--- sebelum kirim ---> prompt_lint.py   (cek prompt, tidak kirim apa pun)
 
-TES (~2.000 baris, 190 lulus)
-  test_fleet.py 17 | test_cli.py 26 | test_cancel.py 13
-  test_orchestrator.py 31 | test_orchestrator_adversarial.py 6
+TES (~2.537 baris, 206 lulus)
+  test_fleet.py 20 | test_cli.py 26 | test_cancel.py 13
+  test_orchestrator.py 34 | test_orchestrator_adversarial.py 6
   test_prompt_lint.py 30 | test_prompt_lint_spec_gaps.py 19
+    test_prompt_lint_karakterisasi.py 10
   test_review_minor.py 8 | test_review_temuan.py 16
   tests/test_dashboard.py 24
 ```

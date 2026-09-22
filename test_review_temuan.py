@@ -106,7 +106,12 @@ class DispatchModelParsing(_FleetBase):
 
 
 class CancelReturnValue(_FleetBase):
-    """cancel(): False dipakai untuk keadaan yang sangat berbeda (baris 121-147)."""
+    """cancel(): tri-state, supaya kegagalan tidak tersamar sebagai 'selesai'.
+
+    Sebelumnya semua keadaan mengembalikan False, sehingga 'server mati' dan
+    'sesi sudah selesai' tidak bisa dibedakan. Diverifikasi terhadap server
+    OpenCode hidup.
+    """
 
     def _cancel(self, payload=None, error=None):
         def fake(req, *a, **k):
@@ -121,42 +126,31 @@ class CancelReturnValue(_FleetBase):
         self.assertIs(self._cancel({"interrupted": True}), True)
 
     def test_sudah_selesai_balikin_false(self):
+        """False = jawaban sah: tidak ada yang perlu dihentikan."""
         self.assertIs(self._cancel({"interrupted": False}), False)
 
-    def test_sesi_tidak_ada_juga_balikin_false(self):
-        """404 tidak bisa dibedakan dari 'sesi sudah selesai'."""
+    def test_sesi_tidak_ada_balikin_none(self):
+        """404 adalah kegagalan, bukan 'sudah selesai'."""
         err = urllib.error.HTTPError("u", 404, "Not Found", email.message.Message(), None)
-        self.assertIs(self._cancel(error=err), False)
+        self.assertIsNone(self._cancel(error=err))
 
-    def test_kredensial_salah_juga_balikin_false(self):
-        """401 tidak bisa dibedakan dari 'sesi sudah selesai'."""
+    def test_kredensial_salah_balikin_none(self):
         err = urllib.error.HTTPError("u", 401, "Unauthorized", email.message.Message(), None)
-        self.assertIs(self._cancel(error=err), False)
+        self.assertIsNone(self._cancel(error=err))
 
-    def test_server_mati_juga_balikin_false(self):
-        """Server tidak terjangkau tidak bisa dibedakan dari 'sesi sudah selesai'."""
+    def test_server_mati_balikin_none(self):
         err = urllib.error.URLError("connection refused")
-        self.assertIs(self._cancel(error=err), False)
+        self.assertIsNone(self._cancel(error=err))
 
-    def test_false_ambigu_untuk_lima_keadaan(self):
-        """Ringkasan: satu nilai False, lima arti berbeda.
+    def test_tiga_keadaan_sekarang_bisa_dibedakan(self):
+        """Inti perbaikan: tiga hasil berbeda untuk tiga keadaan berbeda."""
+        self.assertIs(self._cancel({"interrupted": True}), True)
+        self.assertIs(self._cancel({"interrupted": False}), False)
+        err = urllib.error.URLError("refused")
+        self.assertIsNone(self._cancel(error=err))
 
-        Kalau tes ini mulai gagal, someone changed cancel() to return
-        something distinguishable - perbarui TEMUAN-REVIEW.md juga.
-        """
-        false_cases = [
-            {"interrupted": False},
-            urllib.error.HTTPError("u", 404, "nf", email.message.Message(), None),
-            urllib.error.HTTPError("u", 401, "auth", email.message.Message(), None),
-            urllib.error.URLError("refused"),
-        ]
-        hasil = []
-        for case in false_cases:
-            if isinstance(case, Exception):
-                hasil.append(self._cancel(error=case))
-            else:
-                hasil.append(self._cancel(case))
-        self.assertEqual(hasil, [False, False, False, False])
+    def test_session_id_kosong_balikin_none(self):
+        self.assertIsNone(self.fleet.cancel(""))
 
 
 if __name__ == "__main__":

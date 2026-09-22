@@ -7,6 +7,7 @@ import base64
 import json
 import os
 import re
+import urllib.error
 import urllib.request
 
 _PASSWORD_RE = re.compile(r"server password\s+(\S+)")
@@ -151,7 +152,7 @@ class Fleet:
         return {"outcome": outcome, "last_assistant_text": last_text}
 
     def cancel(self, session_id):
-        """Stop a running session. Returns True when the server confirms.
+        """Stop a running session. Tri-state return.
 
         `POST /api/session/{id}/interrupt` sets the session's outcome to
         "interrupted" and stops the model mid-turn (verified against a live
@@ -163,20 +164,46 @@ class Fleet:
         same files, so a timeout could produce two concurrent writers rather
         than one retry. Cancelling first is what makes "retry" mean "retry".
 
-        A cancel that fails must never crash the run: the session may have
-        finished on its own between the poll and the cancel, in which case the
-        server rejects the interrupt and that is fine.
+        Returns:
+            True  - the server confirmed the interrupt
+            False - nothing to stop: the session had already finished, or was
+                    never started. Verified against a live server, which
+                    answers 200 `{"interrupted": false}` for both.
+            None  - the cancel did not reach a verdict: the session does not
+                    exist (404), credentials were rejected (401), or the server
+                    could not be reached. These are real failures, not "already
+                    finished", and the caller should say so.
+
+        Why tri-state: a plain bool collapsed five different outcomes into
+        False. The orchestrator prints "stopped" only on truthy, so a cancel
+        that failed because the server was down looked identical to one where
+        the session had already finished - and the retry then ran alongside a
+        session nobody managed to stop. That is the exact scenario this method
+        exists to prevent.
+
+        Never raises: a session that already finished will simply refuse the
+        interrupt, and a cancel must never take the run down.
         """
         if not session_id:
-            return False
+            return None
         try:
             response = self._request("POST", f"/api/session/{session_id}/interrupt")
+        except urllib.error.HTTPError as exc:
+            # 404: no such session. 401: bad credentials. Both are failures to
+            # act, and both must stay distinct from "already finished".
+            if exc.code in (404, 401):
+                return None
+            return None
         except Exception:  # noqa: BLE001 - cancel is best-effort by design
-            return False
+            return None
         payload = self._unwrap(response)
         if isinstance(payload, dict):
+            # The server answered. "interrupted" false means it had nothing to
+            # stop, which is a real answer - not a failure.
             return bool(payload.get("interrupted"))
-        return bool(payload)
+        # A truthy non-dict (e.g. a bare `{"data": true}`) still means the
+        # server confirmed. Falsy means it answered without a verdict.
+        return True if payload else None
 
     def list_sessions(self, limit=10):
         """Return a list of session dicts, newest first."""

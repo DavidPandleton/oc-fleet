@@ -3,10 +3,17 @@
 Hasil dua sesi review independen oleh OpenCode (via oc-fleet), plus verifikasi
 manual. Semua temuan dibuktikan dengan eksekusi, bukan pembacaan kode.
 
-Status: **`dispatch()` sudah diperbaiki. `cancel()` belum** - menunggu
-keputusan desain.
+Status: **kedua temuan sudah diperbaiki.**
 
 ---
+
+## Ringkasan
+
+| # | Temuan | Status |
+|---|---|---|
+| 1 | `dispatch()` mengirim model rusak, atau mengabaikannya diam-diam | **diperbaiki** |
+| 2 | `cancel()` mengembalikan `False` untuk lima keadaan berbeda | **diperbaiki** |
+
 
 ## 1. `dispatch()` - parsing model (SUDAH DIPERBAIKI)
 
@@ -71,7 +78,9 @@ masalah, dan itu penilaian yang tepat. Dikunci oleh tes.
 
 ---
 
-## 2. `cancel()` - nilai balik ambigu (BELUM DIPERBAIKI)
+## 2. `cancel()` - nilai balik ambigu (SUDAH DIPERBAIKI)
+
+### Masalahnya
 
 ```python
 payload = self._unwrap(response)
@@ -80,12 +89,12 @@ if isinstance(payload, dict):
 return bool(payload)
 ```
 
-Docstring: "Returns True when the server confirms."
+Docstring lama: "Returns True when the server confirms."
 
 Diuji terhadap server hidup. Bentuk respons nyata
 `POST /api/session/{id}/interrupt`:
 
-| Keadaan sesi | HTTP | Body | `cancel()` |
+| Keadaan sesi | HTTP | Body | `cancel()` (lama) |
 |---|---|---|---|
 | Sedang jalan | 200 | `{"interrupted":true}` | `True` |
 | Sudah diinterupsi | 200 | `{"interrupted":false}` | `False` |
@@ -95,22 +104,46 @@ Diuji terhadap server hidup. Bentuk respons nyata
 | Kredensial salah | 401 | (kosong) | `False` |
 | Server mati | - | connection error | `False` |
 
-Diverifikasi lewat `fleet.cancel()` langsung (bukan simulasi): satu nilai
-`False` dipakai untuk **lima** keadaan berbeda. Hanya `True` yang tidak
-ambigu.
+Satu nilai `False` dipakai untuk **lima** keadaan berbeda. Tiga di antaranya
+kegagalan nyata, bukan "sudah selesai".
 
-Tiga dari lima itu kegagalan nyata: pemanggil yang membaca `False` lalu
-melanjutkan retry bisa mengira sesinya sudah berhenti, padahal server tidak
-pernah berhasil dihubungi. Untuk pemakaian di orchestrator (cancel lalu
-retry), perbedaan ini penting.
+### Kenapa ini berbahaya
 
-`False` berarti lima hal berbeda:
+Bukan hipotetis. `orchestrator.py:321-323` menjelaskan alasannya sendiri:
 
-1. server bilang "tidak ada yang perlu dihentikan" (sesi sudah selesai)
-2. sesi tidak ada (404 - mungkin salah session ID)
-3. autentikasi gagal (401)
-4. server tidak bisa dihubungi sama sekali
-5. (belum pernah jalan - sama saja dengan nomor 1 dari sisi pemanggil)
+> "Cancel before retrying. Without this the abandoned session keeps holding
+> a fleet slot and keeps writing to the workdir while the retry writes to the
+> same place, so 'retry' would mean 'two runs'."
+
+Urutannya: `_cancel_session()` dipanggil, lalu task langsung di-retry. Tapi
+`_cancel_session` hanya mencetak saat hasilnya truthy. Jadi kalau cancel
+gagal karena server tidak terjangkau, hasilnya `False`, dan **diam** - retry
+jalan berdampingan dengan sesi yang tidak pernah berhasil dihentikan. Persis
+skenario yang komentar itu ada untuk mencegahnya.
+
+### Perbaikannya
+
+`cancel()` sekarang tri-state:
+
+- `True` - server mengonfirmasi interrupt
+- `False` - tidak ada yang perlu dihentikan (sesi sudah selesai / belum jalan)
+- `None` - tidak ada keputusan: 404, 401, atau server tidak terjangkau
+
+`None` bersifat falsy, jadi pemanggil lama yang hanya memakai `if stopped:`
+tetap berjalan tanpa perubahan. `orchestrator._cancel_session` sekarang
+mencetak peringatan saat hasilnya `None`, sehingga kegagalan tidak lagi
+tersamar sebagai "sesi sudah selesai".
+
+Diverifikasi terhadap server hidup: 404 -> `None`, sesi selesai -> `False`,
+401 -> `None`, server mati -> `None`.
+
+### Bug tambahan yang ditemukan saat memperbaiki
+
+`fleet.py` memakai `urllib.error.HTTPError` tapi hanya mengimpor
+`urllib.request`. Tanpa `import urllib.error`, cabang `except` itu akan
+melempar `AttributeError` - dan hanya saat ada 404/401, yaitu saat sedang
+menangani kegagalan. Sudah ditambahkan. Ditemukan oleh Pyright, bukan oleh
+tes, karena tidak ada tes yang pernah menyentuh jalur HTTPError.
 
 ### Catatan status review
 
@@ -118,38 +151,45 @@ Sesi review kedua berhenti tanpa kesimpulan akhir - analisis intinya benar,
 tapi keluar jalur dan tidak merangkum. Temuan kasus 404 diambil dari sana,
 lalu diverifikasi ulang secara manual.
 
-### Rekomendasi
-
-`bool` tidak cukup memikul lima keadaan. Pertimbangkan mengembalikan hasil
-yang bisa dibedakan (mis. `True` / `False` / `None`), atau lempar
-pengecualian untuk kegagalan keras (404/401/tidak terhubung) sambil tetap
-mengembalikan `False` untuk "sesi sudah selesai".
-
 ---
 
 ## Tes
 
 | Berkas | Isi |
 |---|---|
-| `test_review_temuan.py` | 15 tes: perilaku baru `dispatch()` + bug `cancel()` yang belum diperbaiki |
+| `test_review_temuan.py` | 16 tes: `dispatch()` dan `cancel()` setelah diperbaiki |
 | `test_fleet.py` | 2 tes lama disesuaikan dengan perilaku baru |
+| `test_cancel.py` | 13 tes, termasuk 3 baru untuk peringatan verdict `None` |
 
-Suite penuh: **184 lulus**.
+Suite penuh: **190 lulus** (sebelumnya 169).
 
-Tes `dispatch()` diuji mutasi 5/5 - setiap pengecekan dibalik satu per satu
-dan tesnya gagal sesuai harapan:
+### Mutasi
+
+Semua perbaikan diuji mutasi - setiap pengecekan dibalik satu per satu dan
+tesnya harus gagal. Tes yang tidak mendeteksi perbaikan adalah dekorasi.
 
 | Mutasi | Hasil |
 |---|---|
-| strip spasi dibatalkan | 1 tes gagal |
+| strip spasi `dispatch()` dibatalkan | 1 tes gagal |
 | cek provider dihapus | 1 tes gagal |
 | cek separator dihapus | 1 tes gagal |
 | cek model id dihapus | 1 tes gagal |
 | strip model dibatalkan | 1 tes gagal |
+| penanganan `ValueError` di CLI dihapus | 1 tes gagal |
+| `cancel()` dikembalikan ke bool lama | 8 tes gagal |
+| peringatan verdict `None` dihapus | 1 tes gagal |
 
-Tes `cancel()` juga diuji mutasi: memindahkan 404/401 menjadi exception
-membuat 3 tes gagal, sementara jalur normal tetap lulus.
+### Verifikasi terhadap server hidup
 
-Diverifikasi juga terhadap server OpenCode hidup: model valid diterima,
-tiga bentuk input rusak ditolak sebelum request dikirim, string kosong
-tetap memakai model default.
+- model valid diterima, tiga bentuk input rusak ditolak sebelum request dikirim
+- `cancel()`: 404 -> `None`, sesi selesai -> `False`, 401 -> `None`,
+  server tidak nyala -> `None`
+
+### Catatan gaya kode
+
+Dua `print` baru memakai format `%`, bukan f-string, karena seluruh file
+sekitarnya memakai `%` (24 kemunculan `UP031` di `orchestrator.py`, 15 di
+`cli.py`).
+Ruff menandai keduanya sebagai `UP031`, sama seperti kode di sekitarnya -
+konsisten dengan gaya berkas, bukan kelalaian.
+

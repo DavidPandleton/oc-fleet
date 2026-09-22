@@ -356,6 +356,16 @@ class Orchestrator:
             return
         if stopped:
             print("stopped: %s (session %s cancelled)" % (tid, session_id))
+        else:
+            # False means the server had nothing to stop (already finished),
+            # which is fine. None means the cancel never got an answer - the
+            # session may still be running and writing to the workdir while the
+            # retry writes to the same place. Say so instead of staying silent.
+            if stopped is None:
+                print(
+                    "warning: could not confirm session %s (%s) stopped - "
+                    "a retry may run alongside it" % (tid, session_id)
+                )
 
     # -- reporting --------------------------------------------------------------
 

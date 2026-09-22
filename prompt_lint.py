@@ -325,6 +325,23 @@ def lint(prompt: str) -> list[Finding]:
 
     Contrast `Fleet.status()`, which parses a *remote* payload - there the
     shape is not under our control, so every field is guarded.
+
+    Scope: this lints a *prompt*, meaning text addressed to an agent. It
+    does not parse prose that merely discusses prompting, and pointing
+    `--file` at a document like README.md gives misleading results:
+
+    * The whole file is treated as one prompt, so a trigger phrase
+      anywhere in it fires a rule for the entire document.
+    * At least one rule's `message` quotes the very phrasing its pattern
+      detects, so a document that reproduces the message triggers the
+      rule. Verified: feeding each rule's own `message` back through
+      `lint` fires exactly one rule, SPEC-TEST-ONLY-VALID - not all of
+      them, because most messages paraphrase rather than quote.
+
+      That is self-reference, not a false positive in the usual sense:
+      the matcher is behaving as designed on input it was not meant for.
+      Measured effect: `--file README.md` reports 6 findings for a
+      document that is not a prompt at all.
     """
     findings: list[Finding] = []
 

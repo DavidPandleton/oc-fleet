@@ -40,6 +40,13 @@ terkontrol. Yang dilaporin: fluff yang nggak ngefek (chain-of-thought,
 urgency, role), scope tak terbatas, output yang nggak bisa diverifikasi,
 em-dash, dan destructive verb tanpa preservation constraint.
 
+Aturan fluff, `VAGUE-OUTPUT`, dan `DESTRUCTIVE-NO-GUARD` sadar negasi:
+prompt yang **melarang** sesuatu nggak dilapor seolah-olah **meminta** hal
+itu. `"Do not use chain of thought"` bukan `"Think step by step"`, dan
+`"Do not delete anything"` bukan `"Delete everything"`. Negasi dibaca
+per-kalimat, dengan konjungsi ber-koma sebagai batas klausa, jadi
+`"Do not retry, and think step by step"` tetap benar dilaporkan.
+
 Sejak eksperimen delegasi (2026-09-21) ada empat aturan tambahan yang nyasar
 celah spec, karena itu mode kegagalan agent yang sebenarnya: dia ngisi celah
 dengan aturan karangan sendiri yang kedengeran masuk akal.
@@ -88,7 +95,7 @@ st = f.status(sid)  # {outcome, last_assistant_text}
 - `orchestrator.py`: DAG runner dengan retry dan parallel branch
 - `prompt_lint.py`: linter prompt berbasis pengukuran
 - `web/dashboard.py`: dashboard stdlib, single file
-- `oc-fleet-wait.py`: detached waiter per session (169 tests total)
+- `oc-fleet-wait.py`: detached waiter per session (209 tests total)
 
 Requires `opencode serve` running. Password dicari berurutan: env
 `OPENCODE_SERVER_PASSWORD`, `/tmp/oc_serve.log`,

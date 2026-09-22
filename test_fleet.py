@@ -314,6 +314,76 @@ class FleetTestCase(unittest.TestCase):
         self.assertEqual(text, "bagus - tapi - perlu fix")
 
     @mock.patch("urllib.request.urlopen")
+    def test_status_reads_the_real_wire_format(self, urlopen):
+        """Format yang BENAR-BENAR dikirim server, bukan yang dikarang tes.
+
+        Ini regresi untuk bug terbesar di repo ini. Selama ini SEMUA tes
+        memakai `{"type": "message", "info": {"role": "assistant"}}`.
+        Server nyata mengirim `{"type": "assistant", ...}` tanpa `info`,
+        jadi `_assistant_text` menolak setiap pesan dan
+        `last_assistant_text` selalu None - terverifikasi pada 22 sesi
+        nyata, nol yang punya teks. `oc-fleet show` selalu mencetak
+        "(none)" dan result JSON oc-fleet-wait.py selalu kosong.
+
+        Bentuk di bawah disalin dari respons `/api/session/<id>/message`
+        yang sungguhan.
+        """
+        urlopen.return_value = _context(
+            {
+                "data": [
+                    {"type": "idle", "outcome": "succeeded"},
+                    {
+                        "id": "msg_0c945dac7001of41Yt8kM1ogw3",
+                        "time": {"created": 1790083193571, "completed": 1790083196906},
+                        "type": "assistant",
+                        "agent": "build",
+                        "model": {"id": "m", "providerID": "p", "variant": "default"},
+                        "content": [
+                            {"type": "reasoning", "text": "monolog internal"},
+                            {"type": "text", "text": "Ini jawaban sebenarnya."},
+                        ],
+                    },
+                ]
+            }
+        )
+        result = self.fleet.status("s-1")
+        self.assertEqual(result["outcome"], "succeeded")
+        self.assertEqual(result["last_assistant_text"], "Ini jawaban sebenarnya.")
+
+    @mock.patch("urllib.request.urlopen")
+    def test_reasoning_is_not_reported_as_the_answer(self, urlopen):
+        """Monolog `reasoning` bukan jawaban.
+
+        Pada satu sesi nyata, `reasoning` berisi sampah
+        (`"Let's I T , __ |s **',/"`) sementara jawaban sebenarnya kosong.
+        Menggabungkannya membuat output tampak lebih baik daripada
+        kenyataannya - dan itu menyembunyikan model yang rusak.
+        """
+        urlopen.return_value = _context(
+            {
+                "data": [
+                    {
+                        "type": "assistant",
+                        "content": [{"type": "reasoning", "text": "Let's I T , __ |s **',/"}],
+                    }
+                ]
+            }
+        )
+        self.assertIsNone(self.fleet.status("s-1")["last_assistant_text"])
+
+    @mock.patch("urllib.request.urlopen")
+    def test_blank_text_is_not_reported_as_an_answer(self, urlopen):
+        """Teks yang hanya spasi tidak dianggap jawaban."""
+        urlopen.return_value = _context(
+            {
+                "data": [
+                    {"type": "assistant", "content": [{"type": "text", "text": "\n\n\n"}]}
+                ]
+            }
+        )
+        self.assertIsNone(self.fleet.status("s-1")["last_assistant_text"])
+
+    @mock.patch("urllib.request.urlopen")
     def test_status_reports_stuck_tool(self, urlopen):
         """Tool yang berstatus running terlalu lama ditandai macet.
 

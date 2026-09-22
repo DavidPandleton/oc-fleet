@@ -301,20 +301,52 @@ class Fleet:
 
     @staticmethod
     def _assistant_text(message):
-        # Every `.get` here is guarded. The server has been observed to send
-        # entries that are not objects (`null`, bare strings, numbers) inside
-        # the `data` list, and `content` entries that are plain strings rather
-        # than `{"type": ..., "text": ...}` objects. One unguarded `.get`
-        # raised AttributeError out of `status()`, which callers like
-        # `oc-fleet show` do not catch.
+        """Teks jawaban assistant dari satu entri pesan, atau None.
+
+        BENTUK PESAN - ini yang membuat fungsi ini salah selama ini.
+        Server OpenCode yang sebenarnya mengirim entri seperti:
+
+            {"id": "msg_...", "type": "assistant", "model": {...},
+             "content": [{"type": "reasoning", "text": "..."},
+                         {"type": "text", "text": "jawabannya"}]}
+
+        Versi lama menuntut `message["type"] == "message"` dan mencari
+        `info.role`. Tidak satu pun ada di respons nyata: `type` bernilai
+        "assistant" dan tidak ada `info`. Akibatnya SETIAP pesan ditolak
+        dan `last_assistant_text` selalu None - terverifikasi pada 22 sesi
+        nyata, nol yang punya teks. `oc-fleet show` selalu mencetak
+        "(none)", dan result JSON dari oc-fleet-wait.py selalu kosong.
+
+        Kenapa tidak ketahuan: seluruh tes memakai `{"type": "message",
+        "info": {"role": "assistant"}}`, bentuk yang tidak pernah dikirim
+        server. Tes menguji asumsi, bukan kenyataan.
+
+        Fungsi ini menerima KEDUA bentuk supaya tidak ada yang rusak:
+        `type == "assistant"` dengan content di level atas (nyata), dan
+        `type == "message"` dengan `info.role` (bentuk lama).
+        """
+        # Setiap `.get` dijaga. Server pernah mengirim entri yang bukan
+        # objek (`null`, string, angka) di dalam `data`, dan entri
+        # `content` berupa string biasa. Satu `.get` tanpa penjagaan
+        # melempar AttributeError keluar dari `status()`.
         if not isinstance(message, dict):
             return None
-        if message.get("type") != "message":
+
+        jenis = message.get("type")
+        if jenis == "message":
+            # Bentuk lama: peran ada di `info.role`.
+            info = message.get("info")
+            role = info.get("role") if isinstance(info, dict) else None
+            if role not in ("assistant", "user"):
+                return None
+        elif jenis in ("assistant", "user"):
+            # Bentuk nyata: peran adalah `type` itu sendiri, dan `info`
+            # tidak ada. Ini yang selama ini ditolak.
+            pass
+        else:
+            # "idle", atau apa pun yang bukan pesan percakapan.
             return None
-        info = message.get("info")
-        role = info.get("role") if isinstance(info, dict) else None
-        if role not in ("assistant", "user"):
-            return None
+
         content = message.get("content")
         if not isinstance(content, list):
             return None
@@ -322,12 +354,18 @@ class Fleet:
         for part in content:
             if not isinstance(part, dict):
                 continue
-            if part.get("type") in ("text", "reasoning"):
+            # Hanya "text" yang dianggap jawaban. "reasoning" adalah
+            # monolog internal model - pada satu sesi nyata isinya sampah
+            # (`"Let's I T , __ |s"`) sementara jawaban sebenarnya kosong.
+            # Mencampurnya membuat output tampak lebih baik daripada
+            # kenyataannya.
+            if part.get("type") == "text":
                 text = part.get("text")
-                # `text` can be a non-string (or missing) on malformed input.
-                # Joining a non-string raised TypeError on the `"\n".join`.
+                # `text` bisa bukan string (atau hilang) pada input rusak.
+                # Menggabungkan non-string melempar TypeError di join.
                 if isinstance(text, str):
                     parts.append(text)
         if not parts:
             return None
-        return "\n".join(parts)
+        gabung = "\n".join(parts).strip()
+        return gabung or None

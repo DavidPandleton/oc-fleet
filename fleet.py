@@ -89,13 +89,45 @@ class Fleet:
             return payload["data"]
         return payload
 
+    @staticmethod
+    def _parse_model(model):
+        """Parse "provider/model-id" into a body fragment, or None to omit.
+
+        Returns None when `model` is empty (use the server default). A
+        non-empty `model` must be a well formed "provider/model-id": both
+        halves non-empty, surrounding whitespace trimmed. Anything else is a
+        typo, and it raises rather than being sent or silently dropped.
+
+        Why raising instead of dropping: the server accepts a malformed
+        model - `POST /api/session` with `providerID: ""` answers 200 and
+        stores it (verified against a live server). The session is then
+        created with a provider that cannot resolve, and it only fails much
+        later, where nobody connects it back to the typo. Refusing here is
+        what keeps a bad model from becoming a bad session.
+        """
+        model = model.strip()
+        if not model:
+            return None
+        provider, sep, model_id = model.partition("/")
+        provider = provider.strip()
+        model_id = model_id.strip()
+        if not sep:
+            raise ValueError(
+                f"model must be 'provider/model-id', got {model!r} (no '/' separator)"
+            )
+        if not provider:
+            raise ValueError(f"model is missing a provider: {model!r}")
+        if not model_id:
+            raise ValueError(f"model is missing a model id: {model!r}")
+        return {"providerID": provider, "id": model_id}
+
     def dispatch(self, task, workdir, title="", model=""):
         """Create a session, post the task prompt, and return its session id."""
         body = {"title": title, "location": {"directory": workdir}}
         if model:
-            provider, _, model_id = model.partition("/")
-            if _ and model_id:
-                body["model"] = {"providerID": provider, "id": model_id}
+            parsed = self._parse_model(model)
+            if parsed is not None:
+                body["model"] = parsed
         session = self._request("POST", "/api/session", body)
         session = self._unwrap(session) or {}
         session_id = session["id"]

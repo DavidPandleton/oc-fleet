@@ -49,7 +49,7 @@ class FleetTestCase(unittest.TestCase):
     def test_dispatch_returns_session_id(self, urlopen):
         responses = [{"data": {"id": "abc123", "title": "t"}}, None]
         urlopen.side_effect = [_context(r) for r in responses]
-        sid = self.fleet.dispatch("do the thing", "/tmp/work", title="TT", model="deepseek")
+        sid = self.fleet.dispatch("do the thing", "/tmp/work", title="TT", model="hulu/deepseek")
         self.assertEqual(sid, "abc123")
         calls = urlopen.call_args_list
         self.assertEqual(calls[0].args[0].full_url, "http://127.0.0.1:4096/api/session")
@@ -80,13 +80,18 @@ class FleetTestCase(unittest.TestCase):
         self.assertNotIn("model", session_body)
 
     @mock.patch("urllib.request.urlopen")
-    def test_dispatch_unsplit_model_is_omitted(self, urlopen):
-        responses = [{"data": {"id": "abc123"}}, None]
-        urlopen.side_effect = [_context(r) for r in responses]
-        self.fleet.dispatch("hello", "/tmp/wd", model="no-slash")
-        session_call = urlopen.call_args_list[0].args[0]
-        session_body = json.loads(session_call.data.decode())
-        self.assertNotIn("model", session_body)
+    def test_dispatch_unsplit_model_is_rejected(self, urlopen):
+        """Model tanpa separator ditolak, bukan didiamkan.
+
+        Perilaku lama adalah mengabaikannya diam-diam, sehingga pemanggil
+        mengira modelnya dipakai padahal sesi jalan dengan default. Ditolak
+        lebih baik karena `cli.py` dan `orchestrator.py` meneruskan model
+        dari pengguna apa adanya.
+        """
+        with self.assertRaises(ValueError):
+            self.fleet.dispatch("hello", "/tmp/wd", model="no-slash")
+        # Tidak boleh ada request HTTP sama sekali: ditolak sebelum dikirim.
+        urlopen.assert_not_called()
 
     @mock.patch("urllib.request.urlopen")
     def test_status_outcome(self, urlopen):

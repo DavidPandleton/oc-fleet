@@ -44,34 +44,65 @@ class _FleetBase(unittest.TestCase):
 
 
 class DispatchModelParsing(_FleetBase):
-    """dispatch(): input rusak dikirim ke server tanpa error (baris 95-98)."""
+    """dispatch(): model rusak ditolak keras (baris 92-98, diperbaiki).
 
-    def test_provider_kosong_ikut_terkirim(self):
-        """'/foo' mengirim providerID kosong - bukan ditolak."""
-        body = self._dispatch_body("/foo")
-        self.assertEqual(body["model"], {"providerID": "", "id": "foo"})
+    Sebelumnya input rusak dikirim ke server tanpa error, atau diabaikan
+    diam-diam. Server menerima `providerID: ""` dengan HTTP 200 dan
+    menyimpannya, jadi sesi baru gagal jauh di kemudian hari.
+    """
 
-    def test_spasi_di_depan_tidak_dibersihkan(self):
-        """' cutad/qwen' mengirim providerID dengan spasi di depan."""
-        body = self._dispatch_body(" cutad/qwen")
-        self.assertEqual(body["model"]["providerID"], " cutad")
+    def _body_atau_error(self, model):
+        with mock.patch("urllib.request.urlopen") as urlopen:
+            urlopen.side_effect = [_context({"data": {"id": "ses_x"}}), _context(None)]
+            self.fleet.dispatch("tugas", "/tmp/wd", model=model)
+            request = urlopen.call_args_list[0].args[0]
+            return json.loads(request.data.decode())
 
-    def test_spasi_di_belakang_tidak_dibersihkan(self):
-        body = self._dispatch_body("cutad /qwen")
-        self.assertEqual(body["model"]["providerID"], "cutad ")
+    def test_provider_kosong_ditolak(self):
+        """'/foo' sekarang ditolak, tidak dikirim dengan providerID kosong."""
+        with self.assertRaisesRegex(ValueError, "missing a provider"):
+            self._body_atau_error("/foo")
 
-    def test_model_tanpa_id_diabaikan_diam_diam(self):
-        """'cutad/' tidak mengirim model sama sekali - tidak ada error."""
-        body = self._dispatch_body("cutad/")
-        self.assertNotIn("model", body)
+    def test_spasi_di_depan_dibersihkan(self):
+        body = self._body_atau_error(" cutad/qwen")
+        self.assertEqual(body["model"]["providerID"], "cutad")
+
+    def test_spasi_di_belakang_dibersihkan(self):
+        body = self._body_atau_error("cutad /qwen")
+        self.assertEqual(body["model"]["providerID"], "cutad")
+
+    def test_model_tanpa_separator_ditolak(self):
+        """'no-slash' ditolak dengan alasan 'tanpa separator'.
+
+        Penting untuk membedakan dari kasus 'cutad/': tanpa cek `sep` yang
+        terpisah, 'no-slash' tertangkap oleh cek model_id kosong dan
+        perilaku lamanya (diabaikan diam-diam) bisa kembali tanpa ketahuan.
+        """
+        with self.assertRaisesRegex(ValueError, "no '/' separator"):
+            self._body_atau_error("no-slash")
+
+    def test_model_tanpa_id_ditolak(self):
+        """'cutad/' ditolak dengan alasan 'tanpa model id'."""
+        with self.assertRaisesRegex(ValueError, "missing a model id"):
+            self._body_atau_error("cutad/")
 
     def test_slash_pertama_benar_untuk_nama_ber_slash(self):
-        """Split di slash pertama memang benar: 'a/b/c' -> id 'b/c'.
-
-        Ini BUKAN bug. Dikunci supaya perbaikan nanti tidak merusaknya.
-        """
-        body = self._dispatch_body("a/b/c")
+        """Split di slash pertama tetap benar: 'a/b/c' -> id 'b/c'."""
+        body = self._body_atau_error("a/b/c")
         self.assertEqual(body["model"], {"providerID": "a", "id": "b/c"})
+
+    def test_model_kosong_tetap_pakai_default(self):
+        """String kosong berarti 'pakai default', bukan kesalahan."""
+        body = self._body_atau_error("")
+        self.assertNotIn("model", body)
+
+    def test_model_spasi_saja_dianggap_kosong(self):
+        body = self._body_atau_error("   ")
+        self.assertNotIn("model", body)
+
+    def test_model_valid_dikirim_apa_adanya(self):
+        body = self._body_atau_error("cutad/qwen3-8-flash-next")
+        self.assertEqual(body["model"], {"providerID": "cutad", "id": "qwen3-8-flash-next"})
 
 
 class CancelReturnValue(_FleetBase):

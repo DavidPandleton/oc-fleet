@@ -1,72 +1,77 @@
 # Temuan review fleet.py
 
 Hasil dua sesi review independen oleh OpenCode (via oc-fleet), plus verifikasi
-manual. Semua temuan sudah dibuktikan dengan eksekusi, bukan pembacaan kode.
+manual. Semua temuan dibuktikan dengan eksekusi, bukan pembacaan kode.
 
-Status: **belum diperbaiki.** Menunggu keputusan desain pemilik repo.
+Status: **`dispatch()` sudah diperbaiki. `cancel()` belum** - menunggu
+keputusan desain.
 
 ---
 
-## 1. `dispatch()` - parsing model (baris 95-98)
+## 1. `dispatch()` - parsing model (SUDAH DIPERBAIKI)
+
+### Masalahnya
 
 ```python
-if model:
-    provider, _, model_id = model.partition("/")
-    if _ and model_id:
-        body["model"] = {"providerID": provider, "id": model_id}
+provider, _, model_id = model.partition("/")
+if _ and model_id:
+    body["model"] = {"providerID": provider, "id": model_id}
 ```
 
 `partition("/")` memotong di slash pertama. Kunci `_` (separator) hanya
-mengecek "ada slash", dan `model_id` hanya mengecek "ada isi setelah slash".
+mengecek "ada slash", `model_id` hanya mengecek "ada isi setelah slash".
 **Provider kosong tidak pernah dicek.**
 
-### Input yang salah
-
-| Input | Yang terjadi | Sifat |
+| Input | Yang terjadi (sebelum) | Sifat |
 |---|---|---|
-| `/foo` | body berisi `{"providerID": "", "id": "foo"}` | **data rusak dikirim** |
-| `" cutad/qwen"` | `providerID = " cutad"` (spasi depan ikut) | **data rusak dikirim** |
-| `"cutad /qwen"` | `providerID = "cutad "` (spasi belakang ikut) | **data rusak dikirim** |
-| `cutad/` | model diabaikan diam-diam | ambigu |
-| `no-slash` | model diabaikan diam-diam | ambigu, **sengaja** |
-| `""` | model diabaikan, benar (pakai default) | benar |
+| `/foo` | body berisi `{"providerID": "", "id": "foo"}` | data rusak dikirim |
+| `" cutad/qwen"` | `providerID = " cutad"` | data rusak dikirim |
+| `"cutad /qwen"` | `providerID = "cutad "` | data rusak dikirim |
+| `cutad/` | model diabaikan diam-diam | salah ketik tidak terdeteksi |
+| `no-slash` | model diabaikan diam-diam | salah ketik tidak terdeteksi |
 
-`/foo` dan spasi adalah bug jelas: kode mengirim body yang melanggar
-kontrak "provider/model-id" ke server. Tidak ada error, tidak ada peringatan.
+### Kenapa ini berbahaya
 
-`cutad/` dan `no-slash` ambigu karena masuk akal untuk menolaknya sebagai
-input tidak lengkap. Perilaku diam untuk `no-slash` **sengaja dikunci** oleh
-`test_fleet.py::test_dispatch_unsplit_model_is_omitted` (baris 83-89), dan
-`test_fleet.py:52` memakai `model="deepseek"` sebagai input normal.
-
-### Kenapa didiamkan itu berbahaya
-
-`cutad/` adalah salah ketik yang wajar (lupa model ID). Pemanggil mengira
-modelnya dipakai, padahal sesi jalan dengan model default. Tidak ada cara
-bagi pemanggil untuk tahu.
-
-### Bukti tambahan: server TIDAK menolak body rusak
-
-Diuji langsung ke server OpenCode hidup. `POST /api/session` dengan
-`providerID: ""` atau `providerID: " cutad"`:
+Diuji ke server OpenCode hidup. `POST /api/session` dengan `providerID: ""`
+atau `providerID: " cutad"`:
 
 - HTTP **200**, bukan 400
 - body rusak **diterima dan disimpan** di sesi
 
-Jadi bug ini lebih buruk dari sekadar "server menolak dengan error". Server
-menerimanya, membuat sesi dengan provider kosong, dan sesi itu baru gagal
-**nanti** - jauh dari titik bug-nya. Pengguna tidak akan menghubungkannya
-dengan input model yang salah ketik.
+Server tidak menolak. Sesi dibuat dengan provider yang tidak bisa
+di-resolve, dan baru gagal **jauh di kemudian hari**, di tempat yang tidak
+ada hubungannya dengan salah ketik model. Pengguna tidak akan pernah
+menghubungkan kegagalan itu dengan `model="/foo"`.
 
-### Catatan verifikasi
+`cli.py:160` dan `orchestrator.py:237` meneruskan `model` dari pengguna apa
+adanya, jadi input salah ketik memang bisa sampai ke sini.
 
-Bukan bug: split di slash **pertama** justru benar kalau nama model
-mengandung slash (`a/b/c` -> `providerID="a"`, `id="b/c"`). OpenCode
-memutuskan ini bukan masalah dan itu penilaian yang tepat.
+### Perbaikannya
+
+Method baru `_parse_model()` (dipisah agar bisa diuji sendiri) dan
+`dispatch()` memakainya:
+
+- string kosong atau hanya spasi -> `None` (pakai model default, bukan error)
+- di-strip: `" cutad/qwen "` -> `{"providerID": "cutad", "id": "qwen"}`
+- tanpa separator -> `ValueError` "no '/' separator"
+- provider kosong -> `ValueError` "missing a provider"
+- model id kosong -> `ValueError` "missing a model id"
+
+Ditolak **sebelum** request HTTP apa pun dikirim.
+
+Perilaku diam untuk `no-slash` sengaja dihapus. Tes lama
+`test_dispatch_unsplit_model_is_omitted` diganti menjadi
+`test_dispatch_unsplit_model_is_rejected`.
+
+### Bukan bug
+
+Split di slash **pertama** tetap benar kalau nama model mengandung slash
+(`a/b/c` -> `providerID="a"`, `id="b/c"`). OpenCode memutuskan ini bukan
+masalah, dan itu penilaian yang tepat. Dikunci oleh tes.
 
 ---
 
-## 2. `cancel()` - nilai balik ambigu (baris 121-147)
+## 2. `cancel()` - nilai balik ambigu (BELUM DIPERBAIKI)
 
 ```python
 payload = self._unwrap(response)
@@ -77,7 +82,7 @@ return bool(payload)
 
 Docstring: "Returns True when the server confirms."
 
-Diuji terhadap server hidup (bukan asumsi). Bentuk respons nyata endpoint
+Diuji terhadap server hidup. Bentuk respons nyata
 `POST /api/session/{id}/interrupt`:
 
 | Keadaan sesi | HTTP | Body | `cancel()` |
@@ -90,10 +95,9 @@ Diuji terhadap server hidup (bukan asumsi). Bentuk respons nyata endpoint
 | Kredensial salah | 401 | (kosong) | `False` |
 | Server mati | - | connection error | `False` |
 
-Diverifikasi ulang lewat `fleet.cancel()` langsung (bukan simulasi logika):
-satu nilai `False` dipakai untuk **lima** keadaan berbeda - sesi sudah
-selesai, sesi belum pernah jalan, sesi tidak ada (404), kredensial salah
-(401), dan server tidak terjangkau. Hanya `True` yang tidak ambigu.
+Diverifikasi lewat `fleet.cancel()` langsung (bukan simulasi): satu nilai
+`False` dipakai untuk **lima** keadaan berbeda. Hanya `True` yang tidak
+ambigu.
 
 Tiga dari lima itu kegagalan nyata: pemanggil yang membaca `False` lalu
 melanjutkan retry bisa mengira sesinya sudah berhenti, padahal server tidak
@@ -106,43 +110,46 @@ retry), perbedaan ini penting.
 2. sesi tidak ada (404 - mungkin salah session ID)
 3. autentikasi gagal (401)
 4. server tidak bisa dihubungi sama sekali
+5. (belum pernah jalan - sama saja dengan nomor 1 dari sisi pemanggil)
 
-Pemanggil tidak punya cara membedakannya. Untuk pemakaian di orchestrator
-(cancel lalu retry), ini penting: `False` karena server sedang mati berbeda
-konsekuensinya dengan `False` karena sesi sudah selesai sendiri.
+### Catatan status review
 
-### Catatan status review ini
+Sesi review kedua berhenti tanpa kesimpulan akhir - analisis intinya benar,
+tapi keluar jalur dan tidak merangkum. Temuan kasus 404 diambil dari sana,
+lalu diverifikasi ulang secara manual.
 
-Sesi review kedua berhenti tanpa kesimpulan akhir - analisis intinya benar
-dan lebih dalam dari yang diperkirakan (nemu kasus 404), tapi keluar jalur
-dan tidak merangkum. Perlu diperiksa ulang sebelum dijadikan dasar.
+### Rekomendasi
 
----
-
-## Rekomendasi
-
-**`dispatch()`**: perlakukan sebagai kesalahan keras. `provider` kosong, atau
-input punya slash tapi model ID kosong, itu salah ketik - lebih baik
-dikatakan daripada didiamkan. Perlu keputusan: apakah `no-slash` tetap
-didiamkan (tes lama) atau ikut ditolak.
-
-**`cancel()`**: `bool` tidak cukup untuk memikul empat keadaan. Pertimbangkan
-mengembalikan hasil yang bisa dibedakan (mis. `True` / `False` / `None`),
-atau lempar pengecualian untuk kegagalan keras (404/401/tidak terhubung)
-sambil tetap mengembalikan `False` untuk "sesi sudah selesai".
-
-Kedua masalah belum diperbaiki. Kode tidak diubah.
+`bool` tidak cukup memikul lima keadaan. Pertimbangkan mengembalikan hasil
+yang bisa dibedakan (mis. `True` / `False` / `None`), atau lempar
+pengecualian untuk kegagalan keras (404/401/tidak terhubung) sambil tetap
+mengembalikan `False` untuk "sesi sudah selesai".
 
 ---
 
-## Tes karakterisasi
+## Tes
 
-`test_review_temuan.py` (11 tes) mengunci perilaku yang ada sekarang, supaya
-perbaikan di masa depan harus mengubahnya secara sadar.
+| Berkas | Isi |
+|---|---|
+| `test_review_temuan.py` | 15 tes: perilaku baru `dispatch()` + bug `cancel()` yang belum diperbaiki |
+| `test_fleet.py` | 2 tes lama disesuaikan dengan perilaku baru |
 
-Sudah diuji mutasi - tes ini benar-benar mendeteksi, bukan dekorasi:
+Suite penuh: **184 lulus**.
 
-- perbaikan `dispatch()` sementara (strip spasi + tolak provider kosong)
-  -> 3 tes gagal, tes yang tidak relevan tetap lulus
-- perbaikan `cancel()` sementara (lempar 404/401)
-  -> 3 tes gagal, jalur normal tetap lulus
+Tes `dispatch()` diuji mutasi 5/5 - setiap pengecekan dibalik satu per satu
+dan tesnya gagal sesuai harapan:
+
+| Mutasi | Hasil |
+|---|---|
+| strip spasi dibatalkan | 1 tes gagal |
+| cek provider dihapus | 1 tes gagal |
+| cek separator dihapus | 1 tes gagal |
+| cek model id dihapus | 1 tes gagal |
+| strip model dibatalkan | 1 tes gagal |
+
+Tes `cancel()` juga diuji mutasi: memindahkan 404/401 menjadi exception
+membuat 3 tes gagal, sementara jalur normal tetap lulus.
+
+Diverifikasi juga terhadap server OpenCode hidup: model valid diterima,
+tiga bentuk input rusak ditolak sebelum request dikirim, string kosong
+tetap memakai model default.

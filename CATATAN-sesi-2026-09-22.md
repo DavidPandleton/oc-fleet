@@ -113,3 +113,42 @@ Kandidat, dalam urutan nilai:
 
 3. **Tidak ada CI.** Semua tes jalan manual. `prompt_lint.py` sudah bisa
    jadi langkah pertama CI kalau ditambahkan.
+
+---
+
+## Tambahan: CI ditambahkan, dan langsung membuktikan sesuatu
+
+`.github/workflows/test.yml`, matrix 3.9 / 3.11 / 3.12.
+
+Hasil run pertama, ketiganya hijau:
+
+```
+test (3.9)   completed  success
+test (3.11)  completed  success
+test (3.12)  completed  success
+```
+
+Yang penting: **3.9 sukses**, padahal mesin lokal tidak punya 3.9 dan gue
+tidak bisa mengujinya di sana.
+
+### Bug yang ditemukan saat menulis workflow
+
+`orchestrator.py` memakai `list[str]` di field dataclass **tanpa**
+`from __future__ import annotations`. Di 3.9 anotasi dataclass dievaluasi
+saat kelas dibuat, jadi itu `TypeError: 'type' object is not subscriptable`
+- modulnya tidak bisa di-import sama sekali.
+
+Jadi menulis matrix CI **menemukan bug kompatibilitas nyata**, sebelum CI
+sempat jalan. Pelajaran: mendefinisikan lingkungan yang didukung memaksa
+memeriksa asumsi yang sebelumnya tidak pernah diuji.
+
+### Yang diverifikasi vs yang diklaim
+
+Dipisah dengan sengaja:
+- 3.11 - suite penuh, lokal
+- 3.14 - import semua modul, lokal (lebih ketat dari 3.11)
+- 3.9 - tidak ada lokal, **tidak diuji langsung saat itu**. Diprediksi
+  benar setelah celah `list[str]` diperbaiki, lalu **dibuktikan CI**.
+
+Kedua baris terakhir itu penting: prediksi yang benar bukan pengganti
+bukti, dan CI-lah yang mengubah prediksi jadi bukti.

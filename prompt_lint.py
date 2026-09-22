@@ -433,8 +433,21 @@ def main() -> int:
     args = ap.parse_args()
 
     if args.file:
-        with open(args.file, encoding="utf-8") as fh:
-            prompt = fh.read()
+        try:
+            with open(args.file, encoding="utf-8") as fh:
+                prompt = fh.read()
+        except OSError as exc:
+            # FileNotFoundError, IsADirectoryError, PermissionError and
+            # friends are all OSError. A CLI should say what went wrong, not
+            # print a Python traceback - the traceback helps nobody who
+            # mistyped a path.
+            print("oc-prompt-lint: cannot read %s: %s" % (args.file, exc.strerror or exc),
+                  file=sys.stderr)
+            return 2
+        except UnicodeDecodeError:
+            # A binary file is not a prompt. Say so instead of crashing.
+            print("oc-prompt-lint: %s is not UTF-8 text" % args.file, file=sys.stderr)
+            return 2
     elif args.prompt is not None:
         prompt = args.prompt
     else:

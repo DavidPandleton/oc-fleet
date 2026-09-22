@@ -158,3 +158,73 @@ def test_empty_prompt_returns_no_findings():
 @pytest.mark.parametrize("prompt", [GOOD_PROMPT, FLUFF_PROMPT, "", "short"])
 def test_lint_never_raises(prompt):
     assert isinstance(lint(prompt), list)
+
+# ---------------------------------------------------------------------------
+# CLI: prompt_lint.py dijalankan sebagai program
+# ---------------------------------------------------------------------------
+# Fungsi lint() sudah diuji di atas, tapi jalan masuk CLI-nya belum pernah.
+# Yang diuji di sini adalah penanganan file yang gagal dibaca - sebelum
+# diperbaiki, keempat kasus di bawah mencetak traceback Python.
+
+
+def _run_cli(argv, **kwargs):
+    """Jalankan prompt_lint.py sebagai subprocess, kembalikan (code, out, err)."""
+    import subprocess
+    import sys
+    import os
+
+    root = os.path.dirname(os.path.abspath(__file__))
+    proc = subprocess.run(
+        [sys.executable, os.path.join(root, "prompt_lint.py")] + argv,
+        capture_output=True,
+        text=True,
+        **kwargs,
+    )
+    return proc.returncode, proc.stdout, proc.stderr
+
+
+def test_cli_missing_file_reports_clearly(tmp_path):
+    """File tidak ada: pesan jelas, exit 2, TANPA traceback."""
+    missing = str(tmp_path / "nope.txt")
+    code, out, err = _run_cli(["--file", missing])
+    assert code == 2
+    assert "Traceback" not in err
+    assert "cannot read" in err
+    assert missing in err
+
+
+def test_cli_directory_reports_clearly(tmp_path):
+    """Direktori: pesan jelas, bukan IsADirectoryError mentah."""
+    code, out, err = _run_cli(["--file", str(tmp_path)])
+    assert code == 2
+    assert "Traceback" not in err
+    assert "cannot read" in err
+
+
+def test_cli_binary_file_reports_clearly(tmp_path):
+    """File biner: pesan jelas, bukan UnicodeDecodeError mentah."""
+    p = tmp_path / "bin.dat"
+    p.write_bytes(b"\xff\xfe\x00binary")
+    code, out, err = _run_cli(["--file", str(p)])
+    assert code == 2
+    assert "Traceback" not in err
+    assert "not UTF-8" in err
+
+
+def test_cli_empty_file_reports_empty(tmp_path):
+    """File kosong: pesan 'empty prompt' yang sudah ada, tetap exit 2."""
+    p = tmp_path / "empty.txt"
+    p.write_text("   \n")
+    code, out, err = _run_cli(["--file", str(p)])
+    assert code == 2
+    assert "empty prompt" in err
+    assert "Traceback" not in err
+
+
+def test_cli_reads_a_real_prompt(tmp_path):
+    """Jalan normal: file prompt yang sah dibaca dan dilint."""
+    p = tmp_path / "task.txt"
+    p.write_text("Fix the parser in /tmp/p.py, run pytest -q, and report the result.")
+    code, out, err = _run_cli(["--file", str(p)])
+    assert code == 0
+    assert "Traceback" not in err

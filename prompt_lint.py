@@ -250,9 +250,15 @@ _NEGATOR_RE = re.compile(rf"\b{_NEGATOR}\b", re.IGNORECASE)
 # the scope of a negator: "Never commit secrets. Think step by step." is a
 # request, not a prohibition.
 _BOUNDARY_RE = re.compile(r"[.!?;](?=\s|$)|\n")
-# Within the sentence, a coordinated clause resets the negator too:
-# "do not retry, and think step by step" orders the second thing.
-_COORD_RE = re.compile(r"\s(?:and|but|or|then|yet)\s", re.IGNORECASE)
+# Within the sentence, a comma followed by a conjunction starts a new
+# clause: "do not retry, and think step by step" orders the second thing,
+# so the earlier negator does not reach it.
+#
+# Only a *comma-joined* conjunction splits. Without the comma, "do not say
+# improve or enhance" coordinates two objects of one verb and the negation
+# still covers both. Requiring the comma is what separates the two, and it
+# is the rule LintLang's `_COORDINATED_CLAUSE` uses for the same reason.
+_COORD_RE = re.compile(r",\s*(?:and|but|or|so|then|yet)\b", re.IGNORECASE)
 
 
 def _sentence_before(text: str, position: int) -> str:
@@ -319,12 +325,18 @@ def lint(prompt: str) -> list[Finding]:
         if pattern == "^":
             continue
         if re.search(pattern, prompt, flags=re.IGNORECASE | re.MULTILINE):
-            # A fluff rule must not fire on a prompt that is *prohibiting*
-            # the fluff. "Do not ask for step-by-step reasoning" is the
-            # opposite of asking for it, and reporting it as if the prompt
-            # asked for it inverts the author's meaning. Scope the rule to
-            # the matched phrase, not to the whole prompt.
-            if rule_id.startswith("FLUFF-") and _is_negated(prompt, pattern):
+            # Two families of rules describe a request that the prompt may
+            # in fact be forbidding. "Do not say improve or enhance" is the
+            # opposite of asking to improve something, and reporting it as
+            # VAGUE-OUTPUT inverts the author's meaning. Same for "Do not
+            # delete anything" against DESTRUCTIVE-NO-GUARD.
+            #
+            # Scope is per-rule rather than global: SPEC-* rules read the
+            # whole prompt as evidence, so a negated phrase elsewhere must
+            # not silence them.
+            if rule_id.startswith(("FLUFF-", "VAGUE-OUTPUT", "DESTRUCTIVE-NO-GUARD")) and (
+                _is_negated(prompt, pattern)
+            ):
                 continue
             findings.append(Finding(rule_id, severity, message, suggestion))
 

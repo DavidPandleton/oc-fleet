@@ -112,9 +112,53 @@ def test_fluff_aturan_lain_juga_dijaga_negasi():
     assert "FLUFF-URGENCY" in rules("This is mission critical production code.")
 
 
+def test_vague_output_tidak_kena_prompt_yang_mengutuk_kata_kabur():
+    """Prompt yang MELARANG kata kabur bukan prompt yang kabur.
+
+    "Do not say improve or enhance" menyebut kata-kata itu untuk
+    dilarang, bukan memakainya sebagai perintah.
+    """
+    assert "VAGUE-OUTPUT" not in rules(
+        "Do not say improve or enhance. Write the parser into /tmp/p.py."
+    )
+    assert "VAGUE-OUTPUT" not in rules(
+        "Avoid vague words like 'make it better'. Fix index.js at line 12."
+    )
+    assert "VAGUE-OUTPUT" not in rules("Do not clean up. Fix the parser at line 4.")
+    # Sisi lain: yang memang memakai kata kabur tetap dilaporkan.
+    assert "VAGUE-OUTPUT" in rules("Improve the codebase. Make it better.")
+    assert "VAGUE-OUTPUT" in rules("Clean up the mess and fix everything you find.")
+
+
+def test_destructive_no_guard_tidak_kena_prompt_yang_melarang():
+    """Prompt yang MELARANG tindakan destruktif bukan tindakan destruktif."""
+    assert "DESTRUCTIVE-NO-GUARD" not in rules(
+        "Do not delete anything. Read /tmp/a.py and report."
+    )
+    assert "DESTRUCTIVE-NO-GUARD" not in rules(
+        "Never force push. Commit to /tmp/repo on branch main."
+    )
+    # Sisi lain: yang memang destruktif tetap dilaporkan.
+    assert "DESTRUCTIVE-NO-GUARD" in rules("Delete all branches and force push.")
+    assert "DESTRUCTIVE-NO-GUARD" in rules("Drop the production database.")
+
+
+def test_konjungsi_tanpa_koma_bukan_klausa_baru():
+    """Hanya konjungsi ber-koma yang memisah klausa.
+
+    "do not say improve or enhance" menghubungkan dua objek dari satu
+    verba, jadi negasinya mencakup keduanya. "do not retry, and think step
+    by step" punya koma, jadi klausa kedua diperintahkan.
+    """
+    assert "VAGUE-OUTPUT" not in rules("Do not say improve or enhance.")
+    assert "FLUFF-COT" in rules("Do not retry, and think step by step.")
+    assert "FLUFF-COT" not in rules("Do not think step by step or reason carefully.")
+
+
 # ---------------------------------------------------------------------------
 # 2. Batas yang diketahui (sengaja LULUS, supaya terlihat)
 # ---------------------------------------------------------------------------
+
 
 def test_BATAS_tidak_ada_deteksi_loop_tak_terbatas():
     """BATAS DIKETAHUI: tidak ada aturan untuk loop tak terbatas.

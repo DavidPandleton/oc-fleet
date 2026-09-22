@@ -98,10 +98,23 @@ def build_parser():
 
     p = sub.add_parser("sessions", help="table of recent sessions: id, title, time")
     p.add_argument("limit", nargs="?", type=int, default=10, help="how many sessions (default: 10)")
+    p.add_argument(
+        "--json",
+        action="store_true",
+        help="keluaran JSON, bukan tabel (untuk skrip dan agen)",
+    )
     p.set_defaults(func=cmd_sessions)
 
     p = sub.add_parser("show", help="full detail for one session")
     p.add_argument("session_id", help="session id")
+    p.add_argument(
+        "--json",
+        action="store_true",
+        help=(
+            "keluaran JSON, termasuk outcome, last_assistant_text, dan "
+            "keaktifan (tool_running, stuck, stuck_seconds)"
+        ),
+    )
     p.set_defaults(func=cmd_show)
 
     p = sub.add_parser("stats", help="totals")
@@ -111,7 +124,27 @@ def build_parser():
 
 
 def _session_id(session):
+    """Id sesi, tahan entri rusak.
+
+    Server pernah mengirim entri yang bukan objek di dalam daftar
+    (`null`, string, angka). Versi lama memanggil `session.get` langsung
+    dan melempar AttributeError, yang menjatuhkan seluruh keluaran
+    `sessions --json` hanya karena satu entri buruk.
+    """
+    if not isinstance(session, dict):
+        return "?"
     return session.get("id") or "?"
+
+
+def _to_json(payload):
+    """Serialisasi JSON yang aman untuk teks dari agent.
+
+    `ensure_ascii=True` supaya keluaran tetap ASCII walau agen menulis
+    karakter eksotis - em-dash pernah bocor ke result JSON dari jalur
+    lain, dan keluaran ASCII menghindari masalah encoding di sisi
+    pemanggil. `sort_keys` membuat bentuknya stabil untuk dibandingkan.
+    """
+    return json.dumps(payload, ensure_ascii=True, sort_keys=True, indent=2)
 
 
 def _fmt_epoch_ms(value):
@@ -125,7 +158,16 @@ def _fmt_epoch_ms(value):
 
 
 def _session_time(session):
-    stamps = session.get("time") or {}
+    """Stempel waktu sesi, tahan entri rusak.
+
+    Sama seperti `_session_id`: entri yang bukan objek, atau `time` yang
+    bukan objek, tidak boleh menjatuhkan seluruh daftar.
+    """
+    if not isinstance(session, dict):
+        return "-"
+    stamps = session.get("time")
+    if not isinstance(stamps, dict):
+        return "-"
     return _fmt_epoch_ms(stamps.get("updated") or stamps.get("created"))
 
 
@@ -193,9 +235,38 @@ def cmd_dispatch(args):
     return 0
 
 
+def _show_exit_code(outcome, state):
+    """Kode keluar untuk `show`.
+
+    Selain outcome yang gagal, sesi yang MACET juga dianggap gagal.
+    Tanpa ini, sesi yang tool call-nya berhenti memberi `outcome: null`
+    dan keluar 0 - sehingga pemanggil program menyimpulkan "masih jalan,
+    tunggu saja", yaitu kesalahan yang sama yang membuat orchestrator
+    menunggu 25 menit.
+    """
+    if outcome in FAILED_OUTCOMES:
+        return 1
+    if isinstance(state, dict) and state.get("stuck"):
+        return 1
+    return 0
+
+
 def cmd_sessions(args):
     fleet = make_fleet(args)
     sessions = fleet.list_sessions(limit=args.limit) or []
+    if getattr(args, "json", False):
+        # Bentuk yang stabil untuk pemanggil program (agen, skrip), supaya
+        # tidak perlu mengurai tabel berkolom yang rapuh terhadap perubahan
+        # lebar dan judul.
+        print(_to_json([
+            {
+                "id": _session_id(s),
+                "title": s.get("title") if isinstance(s, dict) else None,
+                "time": _session_time(s),
+            }
+            for s in sessions
+        ]))
+        return 0
     if not sessions:
         print("(no sessions)")
         return 0
@@ -217,6 +288,20 @@ def cmd_show(args):
     state = fleet.status(args.session_id) or {}
     outcome = state.get("outcome")
     text = state.get("last_assistant_text")
+    if getattr(args, "json", False):
+        # Kunci keaktifan (tool_running, stuck_seconds, stuck) ikut dikirim:
+        # pemanggil program perlu tahu sesi yang berhenti, bukan hanya
+        # sesi yang selesai - itu perbedaan antara menunggu 25 menit dan
+        # langsung tahu ada yang salah.
+        print(_to_json({
+            "session_id": args.session_id,
+            "outcome": outcome,
+            "last_assistant_text": text,
+            "tool_running": state.get("tool_running"),
+            "stuck_seconds": state.get("stuck_seconds"),
+            "stuck": state.get("stuck"),
+        }))
+        return _show_exit_code(outcome, state)
     lines = [
         "session: %s" % args.session_id,
         "outcome: %s" % (outcome if outcome is not None else "(none yet)"),
@@ -226,8 +311,10 @@ def cmd_show(args):
         lines.append(Fleet.sanitize(text))
     else:
         lines.append("last reply: (none)")
+    if state.get("stuck"):
+        lines.append("stuck: yes (%s detik)" % state.get("stuck_seconds"))
     print("\n".join(lines))
-    return 1 if outcome in FAILED_OUTCOMES else 0
+    return _show_exit_code(outcome, state)
 
 
 def cmd_stats(args):

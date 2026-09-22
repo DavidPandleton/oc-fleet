@@ -203,3 +203,61 @@ commit   : 32 sejak 39ffed5
 CI       : GitHub Actions, matrix 3.9 / 3.11 / 3.12, hijau
 worktree : bersih
 ```
+
+---
+
+## Tambahan ketiga: bug yang hanya bisa ditemukan lewat socket mentah
+
+Dua bug di `web/dashboard.py` `do_POST`, keduanya tidak bisa dijangkau
+tes HTTP biasa karena `urllib` menolak mengirim header tidak valid.
+
+### `Content-Length: abc` mematikan handler
+
+```
+length = int(self.headers.get("Content-Length") or 0)
+```
+
+Header ini datang dari **jaringan**. `int()` melempar ValueError keluar
+dari handler. Direproduksi dengan socket mentah:
+
+```
+CL=b'abc'   -> (tidak ada respons, klien menggantung)
+CL=b'12.5'  -> (tidak ada respons)
+```
+
+Bukan sekadar traceback di log: klien tidak menerima apa pun.
+
+### Body non-UTF8 juga
+
+`except json.JSONDecodeError` tidak menangkap `UnicodeDecodeError`
+(turunan `ValueError`, bukan `JSONDecodeError`), jadi byte invalid
+mematikan handler dengan cara yang sama.
+
+### Kenapa ini penting
+
+Ini bug pertama sesi ini yang **bisa dipicu dari luar**. Semua yang lain
+butuh respons server yang rusak atau konfigurasi tidak biasa. Yang ini
+cukup dengan mengirim header buruk ke port yang terbuka.
+
+### Cara menemukannya
+
+Bukan membaca kode, bukan menjalankan tes. Menulis socket mentah dan
+mengirim byte yang tidak akan pernah dikirim `urllib`. Alat yang dipakai
+menentukan bug yang bisa ditemukan.
+
+### Verifikasi tes baru
+
+Tes baru diverifikasi **benar-benar menangkap bug**: dengan bug
+dikembalikan sementara, 4 tes gagal.
+
+---
+
+## Status akhir sesi
+
+```
+suite    : 226 lulus, 28 subtes
+commit   : 35 sejak 39ffed5
+CI       : hijau pada 5 commit terakhir (matrix 3.9 / 3.11 / 3.12)
+worktree : bersih, sinkron origin/master
+urutan   : 226 lulus di tiga urutan berbeda (tidak ada dependensi antar-tes)
+```

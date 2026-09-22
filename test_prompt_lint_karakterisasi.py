@@ -155,6 +155,40 @@ def test_konjungsi_tanpa_koma_bukan_klausa_baru():
     assert "FLUFF-COT" not in rules("Do not think step by step or reason carefully.")
 
 
+def test_spec_aturan_juga_dijaga_negasi():
+    """Aturan SPEC-* yang menyebut frasa juga dijaga negasi.
+
+    Sempat dikira tidak perlu, dengan alasan "SPEC-* membaca seluruh prompt
+    sebagai bukti". Itu salah - ketiganya cocok pada frasa tertentu, dan
+    prompt yang melarang frasa itu dilaporkan seolah memakainya.
+    """
+    assert "SPEC-VERIFY-SELF-REFERENTIAL" not in rules(
+        "Do not run your own tests. Provide independent evidence instead."
+    )
+    assert "SPEC-UNDEFINED-EDGE" not in rules(
+        "Do not write 'etc' or 'and so on'. List every case explicitly."
+    )
+    assert "SPEC-TEST-ONLY-VALID" not in rules(
+        "Do not only verify the examples above. Also test invalid input."
+    )
+    # Sisi lain: yang memang salah tetap dilaporkan.
+    assert "SPEC-VERIFY-SELF-REFERENTIAL" in rules("Run your own tests and check your work.")
+    assert "SPEC-UNDEFINED-EDGE" in rules("Handle all inputs, including etc.")
+    assert "SPEC-TEST-ONLY-VALID" in rules("Verify the examples above.")
+
+
+def test_spec_no_invalid_contract_sengaja_tidak_dijaga_negasi():
+    """SPEC-NO-INVALID-CONTRACT tidak ikut penjagaan, dan itu benar.
+
+    Aturan itu menembak saat prompt TIDAK menyebut kontrak input invalid.
+    Tidak ada frasa yang bisa dinegasi, jadi "do not mention errors" tetap
+    harus dilaporkan - prompt itu memang tidak punya kontraknya.
+    """
+    assert "SPEC-NO-INVALID-CONTRACT" in rules(
+        "Write the function but do not mention errors."
+    )
+
+
 # ---------------------------------------------------------------------------
 # 2. Batas yang diketahui (sengaja LULUS, supaya terlihat)
 # ---------------------------------------------------------------------------

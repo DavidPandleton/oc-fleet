@@ -325,18 +325,30 @@ def lint(prompt: str) -> list[Finding]:
         if pattern == "^":
             continue
         if re.search(pattern, prompt, flags=re.IGNORECASE | re.MULTILINE):
-            # Two families of rules describe a request that the prompt may
-            # in fact be forbidding. "Do not say improve or enhance" is the
-            # opposite of asking to improve something, and reporting it as
-            # VAGUE-OUTPUT inverts the author's meaning. Same for "Do not
-            # delete anything" against DESTRUCTIVE-NO-GUARD.
+            # Rules whose pattern names something the prompt may instead be
+            # forbidding. "Do not say improve or enhance" is the opposite of
+            # asking to improve something, and reporting it as VAGUE-OUTPUT
+            # inverts the author's meaning. Same for "Do not delete anything"
+            # against DESTRUCTIVE-NO-GUARD, and for "Do not run your own
+            # tests" against SPEC-VERIFY-SELF-REFERENTIAL.
             #
-            # Scope is per-rule rather than global: SPEC-* rules read the
-            # whole prompt as evidence, so a negated phrase elsewhere must
-            # not silence them.
-            if rule_id.startswith(("FLUFF-", "VAGUE-OUTPUT", "DESTRUCTIVE-NO-GUARD")) and (
-                _is_negated(prompt, pattern)
-            ):
+            # SPEC-NO-INVALID-CONTRACT is deliberately absent: it fires when
+            # the prompt *omits* an invalid-input contract, so it names
+            # nothing that could be negated.
+            #
+            # Scope stays per-rule. The check is only applied where the rule
+            # reports a phrase, not where it reads the whole prompt as
+            # evidence.
+            if rule_id.startswith(
+                (
+                    "FLUFF-",
+                    "VAGUE-OUTPUT",
+                    "DESTRUCTIVE-NO-GUARD",
+                    "SPEC-UNDEFINED-EDGE",
+                    "SPEC-TEST-ONLY-VALID",
+                    "SPEC-VERIFY-SELF-REFERENTIAL",
+                )
+            ) and (_is_negated(prompt, pattern)):
                 continue
             findings.append(Finding(rule_id, severity, message, suggestion))
 

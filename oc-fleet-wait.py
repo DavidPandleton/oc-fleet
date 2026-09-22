@@ -14,6 +14,7 @@ Exit codes: 0 session completed, 1 timed out, 2 api/connection error.
 
 import argparse
 import json
+import math
 import os
 import sys
 import time
@@ -93,6 +94,30 @@ def main(argv=None):
     parser.add_argument("--interval", type=float, default=5.0, help="poll interval in seconds (default: 5)")
     parser.add_argument("--base-url", default="http://127.0.0.1:4096", help="OpenCode server base URL")
     args = parser.parse_args(argv)
+
+    # A negative interval reaches `time.sleep()` and raises ValueError, which
+    # `except API_ERRORS` does not cover (it is not an OSError), so the CLI
+    # printed a traceback. Zero is worse in a quieter way: it never sleeps,
+    # and measured 17,202 polls in one second against a real status() call.
+    # Both are refused up front with a message instead of an exception.
+    if args.interval <= 0:
+        print(
+            "oc-fleet-wait.py: --interval must be greater than 0 (got %g)" % args.interval,
+            file=sys.stderr,
+        )
+        return 2
+
+    # `--timeout nan` parses fine and is the worst possible value: every
+    # comparison with nan is False, so `time.monotonic() >= deadline` never
+    # fires and the waiter polls forever. Reproduced - it ran past a 400s
+    # external timeout with no end in sight. `inf` is refused too: waiting
+    # forever is never what someone means when they pass a timeout.
+    if not math.isfinite(args.timeout):
+        print(
+            "oc-fleet-wait.py: --timeout must be a finite number (got %s)" % args.timeout,
+            file=sys.stderr,
+        )
+        return 2
 
     fleet = Fleet(base_url=args.base_url)
     try:

@@ -382,6 +382,42 @@ class TestWaitMain(unittest.TestCase):
                 line = fh.read().strip()
             self.assertIn("outcome=timeout after 60s", line)
 
+    def test_main_rejects_non_positive_interval(self):
+        """--interval 0 atau negatif ditolak, bukan traceback atau spam.
+
+        Negatif mencapai time.sleep() dan melempar ValueError, yang TIDAK
+        dicakup `except API_ERRORS` (bukan OSError) - jadi CLI mencetak
+        traceback. Nol lebih buruk diam-diam: tidak pernah tidur, dan
+        terukur 17.202 poll per detik.
+        """
+        for bad in ("0", "-1", "-0.5"):
+            with self.subTest(interval=bad):
+                with mock.patch.object(wait, "Fleet"), \
+                     mock.patch.object(wait, "wait_for_outcome") as wait_fn, \
+                     mock.patch("sys.stderr", new_callable=io.StringIO) as err:
+                    code = wait.main(["abc123", "--interval", bad])
+                self.assertEqual(code, 2)
+                self.assertIn("--interval", err.getvalue())
+                wait_fn.assert_not_called()
+
+    def test_main_rejects_non_finite_timeout(self):
+        """--timeout nan tidak boleh menggantung selamanya.
+
+        nan lolos parse dan semua perbandingannya False, jadi
+        `time.monotonic() >= deadline` tidak pernah menyala dan waiter
+        poll tanpa henti. Direproduksi: ia melewati timeout eksternal 400
+        detik tanpa tanda berhenti.
+        """
+        for bad in ("nan", "inf"):
+            with self.subTest(timeout=bad):
+                with mock.patch.object(wait, "Fleet"), \
+                     mock.patch.object(wait, "wait_for_outcome") as wait_fn, \
+                     mock.patch("sys.stderr", new_callable=io.StringIO) as err:
+                    code = wait.main(["abc123", "--timeout", bad])
+                self.assertEqual(code, 2)
+                self.assertIn("--timeout", err.getvalue())
+                wait_fn.assert_not_called()
+
 
 if __name__ == "__main__":
     unittest.main()

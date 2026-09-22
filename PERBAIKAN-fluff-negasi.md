@@ -180,11 +180,83 @@ Gue melakukan persis itu: hapus tes batasnya, tambah tiga tes di bagian
 
 ## Yang masih belum diperbaiki
 
-`_is_negated` hanya dipakai untuk aturan `FLUFF-*`. Aturan lain masih
-`re.search` polos:
+`_is_negated` sekarang dipakai untuk tiga keluarga aturan:
+`FLUFF-*`, `VAGUE-OUTPUT`, `DESTRUCTIVE-NO-GUARD`.
 
-- `VAGUE-OUTPUT`, `UNBOUNDED-SCOPE`, `DESTRUCTIVE-NO-GUARD` - belum diuji
-  apakah punya false positive negasi serupa.
+Belum diuji apakah punya false positive negasi serupa:
+
+- `NO-ARTEFACT`, `NO-CONSTRAINT` - aturan "tidak ada X" ini membaca
+  seluruh prompt sebagai bukti. Frasa ternegasi di satu tempat tidak
+  boleh membungkamnya, jadi kemungkinan besar memang tidak perlu.
+- `SPEC-*` - idem, dan sengaja tidak dimasukkan ke daftar.
+- `UNBOUNDED-SCOPE` - diuji, ternyata bersih (nol false positive pada
+  kasus yang dicoba).
 
 Kandidat berikutnya untuk diperiksa. Tapi jangan tebak - **uji dulu**,
 dengan prompt berlawanan maksud seperti di atas.
+
+---
+
+## Tambahan: dua aturan lain, dan satu bug di perbaikannya sendiri
+
+Setelah `FLUFF-*` diperbaiki, gue uji aturan lain. Dua lagi kena:
+
+```
+"Do not say improve or enhance."   -> VAGUE-OUTPUT (salah)
+"Do not delete anything."          -> DESTRUCTIVE-NO-GUARD (salah)
+```
+
+Keduanya prompt yang **melarang** hal yang aturannya cari. Bentuknya sama
+persis. `_is_negated` diperluas ke tiga keluarga aturan, dengan cakupan
+per-aturan (bukan global), supaya `SPEC-*` tidak ikut terbungkam.
+
+### Bug di logika klausa
+
+Perbaikan pertama gue **memecahkan** kasus koordinatif:
+
+```
+"Do not retry, and think step by step."
+```
+
+Ini **memerintahkan** chain-of-thought di klausa kedua. Tapi `_COORD_RE`
+gue memotong di setiap konjungsi, sehingga "and think step by step"
+kehilangan negatornya DAN jadi salah diblok.
+
+Dua percobaan gagal:
+
+1. **Butuh subjek setelah konjungsi.** "and think" tidak punya subjek,
+   jadi tidak terdeteksi sebagai klausa baru. Gagal.
+2. **Daftar akhiran kata.** Heuristik rapuh - pola `[a-z]+(?:e|y|t|k|...)`
+   cocok dengan hampir semua kata. Itu bukan definisi, itu tebakan.
+
+Yang benar, dan lebih sederhana: **hanya konjungsi yang didahului koma
+yang memisah klausa.**
+
+```
+"do not say improve or enhance"        -> tanpa koma, satu objek list
+"do not retry, and think step by step" -> ada koma, klausa baru
+```
+
+Itu perilaku yang sama dengan `_left_clause_start` di LintLang, yang
+memanggil `_COORDINATED_CLAUSE` **hanya setelah menemukan koma**
+(`patterns.py:292`). Gue sampai ke sana lewat dua kegagalan, bukan lewat
+membaca, tapi hasilnya sama.
+
+Diverifikasi langsung pada kode mereka:
+
+```
+_left_clause_start("Do not say improve or enhance", 0)      -> 0
+    negasi mencakup seluruh kalimat
+_left_clause_start("Do not retry, and think step by step", 0) -> 13
+    negasi dipotong di koma, klausa kedua diperintahkan
+```
+
+Catatan: `_COORDINATED_CLAUSE` di LintLang terlihat seperti memisah di
+setiap konjungsi (polanya `\s*(?:and|but|or|...)`), tapi pemanggilnya
+hanya memakainya **setelah koma** ditemukan. Yang menentukan bukan pola
+konjungsi, tapi fakta bahwa koma harus ada lebih dulu.
+
+Pelajaran yang diulang: **kalau perbaikan mulai butuh daftar kata atau
+pola yang makin rumit, itu tanda sedang menambal. Berhenti, cari definisi
+yang lebih sederhana.**
+

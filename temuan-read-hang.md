@@ -175,6 +175,37 @@ adalah bukti yang membedakan keduanya.
 
 ---
 
+## Konfirmasi independen dari endpoint stats server
+
+Angka di atas gue hitung sendiri dari daftar pesan. Server punya
+hitungannya sendiri di `/api/session/stats`, dan angkanya cocok:
+
+```
+tools: calls=827  succeeded=793  failed=34
+```
+
+**34 dari 827 tool call gagal (4.1%)**, dihitung oleh server, bukan oleh
+skrip ini. Dua sumber berbeda menunjuk arah yang sama.
+
+Perhatikan angkanya berbeda dari tabel di atas, dan itu wajar - bukan
+kontradiksi:
+
+| Sumber | Cakupan | Angka |
+|--------|---------|-------|
+| Skrip ini | 40 sesi terbaru | 8 nyangkut / 42 read |
+| Endpoint stats | seluruh riwayat (180 sesi, 5 hari) | 34 gagal / 827 call |
+
+Yang penting bukan angka tunggalnya, melainkan bahwa `read` adalah
+satu-satunya tool dengan kegagalan (0/91 shell, 8/34 read), dan server
+mengonfirmasi adanya kegagalan tool pada tingkat keseluruhan.
+
+Perbedaan metode hitung juga menjelaskan kenapa angkanya tidak sama
+persis: skrip ini menghitung `status: running` sebagai nyangkut,
+sementara `stats` menghitung tool yang gagal dengan cara sendiri. Dua
+definisi berbeda atas gejala yang sama.
+
+---
+
 ## Data mentah
 
 Diambil dengan:

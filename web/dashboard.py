@@ -13,6 +13,14 @@ Endpoints:
     POST /api/dispatch     JSON {task, workdir, model, title} -> {session_id}
     GET  /api/sessions     recent sessions as JSON
     GET  /api/events       SSE proxy forwarding session.execution.* events
+    GET  /api/stats        session stats as JSON
+                           (/api/experimental/session/stats is an alias)
+
+Paths are matched with exact string comparison, so a query string is part
+of the path: `/api/sessions?limit=5` does not match `/api/sessions` and
+falls through to 404. Nothing in the page sends a query string today, so
+this is a trap for the next person rather than a live bug - adding
+`?limit=` to a URL here returns 404 with no hint why.
 """
 
 import argparse

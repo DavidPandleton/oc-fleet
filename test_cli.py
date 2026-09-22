@@ -290,6 +290,29 @@ class TestWaitForOutcome(unittest.TestCase):
             outcome, _ = wait.wait_for_outcome(fleet, "abc", timeout=1800, interval=5)
         self.assertEqual(outcome, "done")
 
+    def test_poll_errors_outside_api_errors_are_tolerated(self):
+        """Blip di luar API_ERRORS tidak boleh mematikan waiter.
+
+        Bentuk yang sama dengan cacat orchestrator #4: exception di luar
+        tuple yang dijaga lolos dan mematikan proses. Waiter ini detached,
+        jadi kalau mati tidak ada yang tahu. Tes lama hanya memakai OSError.
+        """
+        for exc in (
+            RuntimeError("malformed response"),
+            TypeError("unexpected shape"),
+            Exception("anything at all"),
+        ):
+            with self.subTest(exc=type(exc).__name__):
+                fleet = mock.Mock()
+                fleet.status.side_effect = [
+                    exc,
+                    {"outcome": "done", "last_assistant_text": "t"},
+                ]
+                with mock.patch("oc_fleet_wait.time.sleep"), \
+                     mock.patch("oc_fleet_wait.time.monotonic", side_effect=[100.0, 105.0]):
+                    outcome, _ = wait.wait_for_outcome(fleet, "abc", timeout=1800, interval=5)
+                self.assertEqual(outcome, "done")
+
 
 class TestWaitFileHelpers(unittest.TestCase):
     def test_write_result_file(self):

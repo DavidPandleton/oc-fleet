@@ -28,6 +28,13 @@ ALERTS_LOG = os.path.join(
     os.path.expanduser("~"), ".hermes", "mailbox", "opencode", "alerts.log"
 )
 API_ERRORS = (OSError, json.JSONDecodeError, KeyError)
+# Polling swallows everything, for the same reason the orchestrator does:
+# the network failure space cannot be enumerated. `fleet.status` can raise
+# RuntimeError from a malformed response, and http.client.HTTPException
+# (IncompleteRead, BadStatusLine) is not an OSError. Either one, caught
+# narrowly, killed the waiter - which runs detached, so nothing noticed.
+# A wrongly-tolerated error only costs one more poll.
+POLL_ERRORS = Exception
 
 
 def _ts():
@@ -68,7 +75,7 @@ def wait_for_outcome(fleet, session_id, timeout=1800.0, interval=5.0):
             last = {"outcome": state.get("outcome"), "last_assistant_text": state.get("last_assistant_text")}
             if last["outcome"] is not None:
                 return last["outcome"], last["last_assistant_text"]
-        except API_ERRORS:
+        except POLL_ERRORS:
             # transient api blip: keep polling until the deadline
             pass
         if time.monotonic() >= deadline:

@@ -54,13 +54,21 @@ def build_parser():
     )
     parser.add_argument(
         "--base-url",
-        default="http://127.0.0.1:4096",
-        help="OpenCode server base URL (default: http://127.0.0.1:4096)",
+        default=None,
+        help=(
+            "OpenCode server base URL. Kalau tidak diberikan, alamat "
+            "ditemukan otomatis (port serve bersifat acak, jadi default "
+            "tetap apa pun hampir selalu salah)."
+        ),
     )
     parser.add_argument(
         "--password-file",
-        default="/tmp/oc_serve.log",
-        help="file containing the server password (default: /tmp/oc_serve.log)",
+        default=None,
+        help=(
+            "file berisi password server. Kalau tidak diberikan, kredensial "
+            "dicari di $OPENCODE_SERVER_PASSWORD, lalu service.json, lalu "
+            "log serve."
+        ),
     )
     sub = parser.add_subparsers(dest="command", required=True)
 

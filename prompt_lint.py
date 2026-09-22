@@ -224,6 +224,90 @@ def _has_artefact(text: str) -> bool:
     return any(re.search(p, lowered) for p in ARTEFACT_PATTERNS)
 
 
+# Negation handling, kept deliberately small. The lesson from LintLang's
+# H2 is that a naive "is there a negation word nearby" check produces the
+# opposite error: it suppresses real findings. So this makes two narrow
+# claims and nothing more:
+#
+#   1. The negator must be in the same sentence as the fluff phrase.
+#   2. The sentence must not contain a clause break between them.
+#
+# A fixed character window was tried first and failed both ways: too wide
+# and it reaches across sentence boundaries ("Never commit secrets. Think
+# step by step." lost its real finding), too narrow and ordinary wording
+# is missed ("Never ask for step-by-step reasoning.").
+_NEGATOR = (
+    r"(?:never|do\s+not|don['\u2019]?t|does\s+not|doesn['\u2019]?t|"
+    r"must\s+not|mustn['\u2019]?t|should\s+not|shouldn['\u2019]?t|"
+    r"avoid|avoiding|refrain\s+from|no\s+need\s+to|without|forbidden|prohibited|"
+    # Copula-bound "not" only: "this is not mission critical" prohibits,
+    # while a bare "not" ("not just the answer") does not. Binding it to a
+    # verb keeps the common bare form out of the negator set.
+    r"is\s+not|are\s+not|was\s+not|were\s+not|isn['\u2019]?t|aren['\u2019]?t)"
+)
+_NEGATOR_RE = re.compile(rf"\b{_NEGATOR}\b", re.IGNORECASE)
+# Sentence boundaries. A semicolon, a newline, or terminal punctuation ends
+# the scope of a negator: "Never commit secrets. Think step by step." is a
+# request, not a prohibition.
+_BOUNDARY_RE = re.compile(r"[.!?;](?=\s|$)|\n")
+# Within the sentence, a coordinated clause resets the negator too:
+# "do not retry, and think step by step" orders the second thing.
+_COORD_RE = re.compile(r"\s(?:and|but|or|then|yet)\s", re.IGNORECASE)
+
+
+def _sentence_before(text: str, position: int) -> str:
+    """Return the text of the sentence containing ``position``, up to it."""
+    starts = [m.end() for m in _BOUNDARY_RE.finditer(text, 0, position)]
+    start = starts[-1] if starts else 0
+    return text[start:position]
+
+
+def _sentence_after(text: str, position: int) -> str:
+    """Return the text from ``position`` to the end of its sentence."""
+    end = _BOUNDARY_RE.search(text, position)
+    return text[position : end.start()] if end else text[position:]
+
+
+# A prohibition can also trail the phrase: "Think step by step is
+# forbidden." The right-hand side is checked only up to the next clause
+# boundary, so an unrelated later sentence cannot suppress a finding.
+#
+# A bare "not" is deliberately NOT a left-hand negator: "Think step by
+# step, not just the answer" requests the thinking. It is only read as a
+# prohibition when it is bound to a predicative form ("is not allowed",
+# "is not mission critical"), which is a shape, not a bare word.
+_TRAILING_PROHIBITION = re.compile(
+    r"\b(?:is|are|was|were)\s+(?:strictly\s+)?"
+    r"(?:forbidden|prohibited|banned|not\s+allowed|not\s+\w+|"
+    r"unnecessary|unwanted)\b",
+    re.IGNORECASE,
+)
+
+
+def _is_negated(text: str, pattern: str) -> bool:
+    """True if every match of ``pattern`` sits inside a prohibition.
+
+    Returns False when any match is not negated, so a prompt that both
+    forbids and requests the same fluff is still reported. That asymmetry
+    is deliberate: a missed finding costs more than an extra one.
+    """
+    matches = list(re.finditer(pattern, text, flags=re.IGNORECASE | re.MULTILINE))
+    if not matches:
+        return False
+    for match in matches:
+        sentence = _sentence_before(text, match.start())
+        trailing = _sentence_after(text, match.end())
+        negated_before = bool(_NEGATOR_RE.search(sentence))
+        # A negator in an earlier coordinated clause does not reach this
+        # one: "do not retry, and think step by step".
+        if negated_before and not _NEGATOR_RE.search(_COORD_RE.split(sentence)[-1]):
+            negated_before = False
+        negated_after = bool(_TRAILING_PROHIBITION.search(trailing))
+        if not (negated_before or negated_after):
+            return False
+    return True
+
+
 def lint(prompt: str) -> list[Finding]:
     """Lint a dispatch prompt. Returns findings, most severe first."""
     findings: list[Finding] = []
@@ -235,6 +319,13 @@ def lint(prompt: str) -> list[Finding]:
         if pattern == "^":
             continue
         if re.search(pattern, prompt, flags=re.IGNORECASE | re.MULTILINE):
+            # A fluff rule must not fire on a prompt that is *prohibiting*
+            # the fluff. "Do not ask for step-by-step reasoning" is the
+            # opposite of asking for it, and reporting it as if the prompt
+            # asked for it inverts the author's meaning. Scope the rule to
+            # the matched phrase, not to the whole prompt.
+            if rule_id.startswith("FLUFF-") and _is_negated(prompt, pattern):
+                continue
             findings.append(Finding(rule_id, severity, message, suggestion))
 
     # Contextual rules that need more than a regex on their own.

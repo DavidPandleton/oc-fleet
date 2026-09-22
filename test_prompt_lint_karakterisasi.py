@@ -74,27 +74,47 @@ def test_em_dash_memeriksa_karakter_bukan_kata():
     assert "EM-DASH" in result
 
 
+def test_fluff_cot_tidak_kena_prompt_yang_melarang():
+    """Prompt yang MELARANG chain-of-thought bukan memakai chain-of-thought.
+
+    Dulu ini false positive (tercatat di commit sebelumnya, ditemukan lewat
+    uji head-to-head melawan LintLang). Sekarang diperbaiki lewat
+    `_is_negated`, yang membatasi cakupan aturan fluff ke kalimatnya
+    sendiri.
+    """
+    assert "FLUFF-COT" not in rules(
+        "Do not use chain of thought. Think step by step is forbidden."
+    )
+    assert "FLUFF-COT" not in rules("Never ask for step-by-step reasoning.")
+    assert "FLUFF-COT" not in rules("Avoid chain of thought.")
+    assert "FLUFF-COT" not in rules("Think step by step is unnecessary.")
+
+
+def test_fluff_cot_masih_menangkap_yang_memang_memakai():
+    """Sisi lain: perbaikan tidak boleh mematikan temuan yang benar.
+
+    Ini penjaga utama. Kalau `_is_negated` terlalu luas, tes ini gagal.
+    """
+    assert "FLUFF-COT" in rules("Think step by step and reason carefully.")
+    assert "FLUFF-COT" in rules("Please think step by step.")
+    assert "FLUFF-COT" in rules("This is critical production code. Think step by step.")
+    # Negator di kalimat lain tidak boleh menular ke kalimat berikutnya.
+    assert "FLUFF-COT" in rules("Never commit secrets. Think step by step.")
+    # Negator di klausa koordinatif sebelumnya tidak menular.
+    assert "FLUFF-COT" in rules("Do not retry, and think step by step.")
+
+
+def test_fluff_aturan_lain_juga_dijaga_negasi():
+    """Perbaikan berlaku untuk semua aturan FLUFF-*, bukan cuma COT."""
+    assert "FLUFF-ROLE" not in rules("Do not act as a senior engineer.")
+    assert "FLUFF-ROLE" in rules("You are a senior engineer. Write the function.")
+    assert "FLUFF-URGENCY" not in rules("This is not mission critical.")
+    assert "FLUFF-URGENCY" in rules("This is mission critical production code.")
+
+
 # ---------------------------------------------------------------------------
 # 2. Batas yang diketahui (sengaja LULUS, supaya terlihat)
 # ---------------------------------------------------------------------------
-
-def test_BATAS_fluff_cot_false_positive_pada_larangan():
-    """BATAS DIKETAHUI: FLUFF-COT tidak bisa membedakan melarang dari memakai.
-
-    Prompt ini MELARANG chain-of-thought, tapi dilaporkan MEMAKAI
-    chain-of-thought. Itu false positive.
-
-    Tes ini lulus (yaitu false positive-nya terkonfirmasi). Kalau suatu
-    hari gagal, berarti FLUFF-COT sudah diperbaiki - hapus tes ini dan
-    pindahkan kasusnya ke bagian 1.
-    """
-    melarang = rules("Do not use chain of thought. Think step by step is forbidden.")
-    memakai = rules("Think step by step and reason carefully.")
-
-    # Keduanya menghasilkan temuan yang sama: itu bugnya.
-    assert "FLUFF-COT" in melarang
-    assert "FLUFF-COT" in memakai
-
 
 def test_BATAS_tidak_ada_deteksi_loop_tak_terbatas():
     """BATAS DIKETAHUI: tidak ada aturan untuk loop tak terbatas.

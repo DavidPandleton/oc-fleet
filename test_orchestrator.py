@@ -216,6 +216,40 @@ class AddAndValidateTestCase(unittest.TestCase):
         with self.assertRaises(ValueError):
             orch.add(Task(id="a", prompt="p", depends_on=["a"]))
 
+    def test_ctrl_c_is_not_swallowed_by_run(self):
+        """KeyboardInterrupt menembus run(), bukan ditelan jadi 'attempt gagal'.
+
+        RUN_ERRORS = Exception sengaja, bukan BaseException. Ctrl-C dan
+        sys.exit() adalah BaseException; menangkapnya akan mengubah
+        pembatalan oleh pengguna menjadi satu attempt yang gagal, dan
+        pengguna tidak bisa menghentikan run.
+
+        Tes ini mengunci keputusan itu. Kalau seseorang melebarkan
+        RUN_ERRORS jadi BaseException, tes ini gagal dan memaksa mereka
+        memikirkannya dulu.
+        """
+        fleet = FakeFleet()
+        fleet.fail_dispatch_with = KeyboardInterrupt()
+        orch = make_orch(fleet, [Task(id="a", prompt="pa")])
+        with self.assertRaises(KeyboardInterrupt):
+            orch.run()
+
+    def test_system_exit_is_not_swallowed_by_run(self):
+        """SystemExit juga menembus, alasannya sama dengan KeyboardInterrupt."""
+        fleet = FakeFleet()
+        fleet.fail_dispatch_with = SystemExit(1)
+        orch = make_orch(fleet, [Task(id="a", prompt="pa")])
+        with self.assertRaises(SystemExit):
+            orch.run()
+
+    def test_run_errors_is_exception_not_base_exception(self):
+        """Kunci tipe RUN_ERRORS secara langsung."""
+        from orchestrator import RUN_ERRORS
+
+        self.assertTrue(issubclass(RuntimeError, RUN_ERRORS))
+        self.assertFalse(issubclass(KeyboardInterrupt, RUN_ERRORS))
+        self.assertFalse(issubclass(SystemExit, RUN_ERRORS))
+
     def test_validate_rejects_bad_task_before_any_dispatch(self):
         """validate() menolak sebelum satu sesi pun dibuat."""
         fleet = FakeFleet()

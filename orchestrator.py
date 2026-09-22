@@ -36,6 +36,15 @@ FAILED_OUTCOMES = {"failed", "crashed", "error", "cancelled", "canceled"}
 # status). The dispatch one was the leak: it missed RuntimeError, so a bad
 # server response killed a run and abandoned siblings as "running". One
 # constant removes the chance of the two drifting apart again.
+#
+# Deliberately `Exception`, NOT `BaseException`. Ctrl-C raises
+# KeyboardInterrupt and `sys.exit()` raises SystemExit, both BaseException
+# subclasses; catching those would swallow a user's cancellation and turn
+# it into "one attempt failed". Letting them through is correct - the cost
+# is that a run interrupted this way leaves its live tasks marked
+# "running", which is the right trade for a user-initiated stop.
+#
+# Do not widen this to BaseException.
 RUN_ERRORS = Exception
 # Kept as the name the polling path reads; identical by construction.
 POLL_ERRORS = RUN_ERRORS

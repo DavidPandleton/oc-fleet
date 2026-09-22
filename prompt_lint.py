@@ -315,7 +315,17 @@ def _is_negated(text: str, pattern: str) -> bool:
 
 
 def lint(prompt: str) -> list[Finding]:
-    """Lint a dispatch prompt. Returns findings, most severe first."""
+    """Lint a dispatch prompt. Returns findings, most severe first.
+
+    `prompt` is required to be a str, and the annotation is the whole
+    contract. A non-str raises AttributeError on the `.strip()` below, and
+    that is deliberate: every caller passes a str (argparse, a file read,
+    or `sys.stdin.read()`), so a non-str means a bug in the caller, not
+    bad input to guard against. Swallowing it here would hide that bug.
+
+    Contrast `Fleet.status()`, which parses a *remote* payload - there the
+    shape is not under our control, so every field is guarded.
+    """
     findings: list[Finding] = []
 
     if not prompt.strip():

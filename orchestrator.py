@@ -52,7 +52,7 @@ class Task:
     title: str = ""
     depends_on: list[str] = field(default_factory=list)
     retries: int = 0
-    timeout: int = 1800
+    timeout: float = 1800
 
 
 def _new_record():
@@ -201,7 +201,17 @@ class Orchestrator:
                 break
             self._poll_running(pending, running)
             if running:
-                time.sleep(self.poll_interval)
+                # Sleep until the next poll, but never past the nearest
+                # deadline. Sleeping the full interval regardless meant a
+                # task with timeout=1 and the default interval overshot by
+                # up to 3s - a 3x error on the deadline the caller asked for.
+                sleep_for = self.poll_interval
+                nearest = min(info["deadline"] for info in running.values())
+                remaining = nearest - time.monotonic()
+                if remaining < sleep_for:
+                    sleep_for = max(remaining, 0.0)
+                if sleep_for:
+                    time.sleep(sleep_for)
         return self.results()
 
     def _print_plan(self):

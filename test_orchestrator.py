@@ -604,6 +604,37 @@ class DispatchConfigTestCase(unittest.TestCase):
         self.assertIn("connection refused", output)
         self.assertNotIn("(None)", output)
 
+    def test_timeout_does_not_overshoot_by_a_whole_poll_interval(self):
+        """Timeout tidak melewati deadline lebih dari satu interval penuh.
+
+        Dulu loop tidur `poll_interval` penuh tanpa melihat deadline, jadi
+        timeout=0.5 dengan interval 3.0 selesai di ~3s: 6x lipat. Sekarang
+        tidurnya dipotong sampai deadline terdekat.
+        """
+        import contextlib
+        import io
+        import time
+
+        class NeverFinishes:
+            def dispatch(self, *a, **k):
+                return "s-1"
+
+            def status(self, sid):
+                return {"outcome": None, "last_assistant_text": None}
+
+            def cancel(self, sid):
+                return None
+
+        orch = Orchestrator(fleet=NeverFinishes(), max_parallel=1, poll_interval=3.0)
+        orch.add(Task(id="a", prompt="p", workdir="/tmp/x", timeout=0.3))
+        started = time.monotonic()
+        with contextlib.redirect_stdout(io.StringIO()):
+            orch.run()
+        elapsed = time.monotonic() - started
+        # Longgar: beri ruang untuk mesin lambat, tapi jauh di bawah 3s.
+        self.assertLess(elapsed, 1.5, "timeout melewati deadline terlalu jauh")
+        self.assertEqual(orch.results()["a"]["status"], "failed")
+
     def test_fleet_is_lazily_created_when_not_provided(self):
         orch = Orchestrator(max_parallel=1)
         self.assertIsNone(orch._fleet)

@@ -68,7 +68,15 @@ class Fleet:
 
     @staticmethod
     def sanitize(text):
-        """Replace em-dash and en-dash so they are never emitted."""
+        """Replace em-dash and en-dash so they are never emitted.
+
+        Agent output reaches humans through several paths - `oc-fleet show`,
+        the result JSON written by `oc-fleet-wait.py`, and the orchestrator's
+        `last_text`. Only `show` used to call this, so an em-dash typed by an
+        agent leaked into the other two. Rather than remember to call it at
+        each call site, `status()` now sanitises as it reads, so every path
+        downstream inherits it.
+        """
         return text.replace("\u2014", "-").replace("\u2013", "-")
 
     def _request(self, method, path, data=None):
@@ -174,7 +182,12 @@ class Fleet:
                 outcome = message["outcome"]
             assistant_text = self._assistant_text(message)
             if assistant_text is not None:
-                last_text = assistant_text
+                # Sanitise at the boundary rather than at each call site.
+                # `oc-fleet show` called Fleet.sanitize explicitly, but the
+                # result JSON from `oc-fleet-wait.py` and the orchestrator's
+                # `last_text` did not, so an em-dash from an agent leaked
+                # into both. Doing it here covers every consumer.
+                last_text = self.sanitize(assistant_text)
         return {"outcome": outcome, "last_assistant_text": last_text}
 
     def cancel(self, session_id):

@@ -267,6 +267,32 @@ class FleetTestCase(unittest.TestCase):
         self.assertEqual(result["outcome"], "done")
         self.assertEqual(result["last_assistant_text"], "halo")
 
+    @mock.patch("urllib.request.urlopen")
+    def test_status_sanitizes_dashes_at_the_source(self, urlopen):
+        """status() mengganti em-dash/en-dash, jadi semua pemakai ikut bersih.
+
+        Sebelumnya hanya `oc-fleet show` yang memanggil Fleet.sanitize,
+        sehingga em-dash dari agent bocor ke result JSON milik
+        oc-fleet-wait.py dan ke `last_text` orchestrator. Sanitasi sekarang
+        dilakukan saat membaca, di batas masuknya.
+        """
+        urlopen.return_value = _context(
+            {
+                "data": [
+                    {
+                        "type": "message",
+                        "info": {"role": "assistant"},
+                        "content": [{"type": "text", "text": "bagus \u2014 tapi \u2013 perlu fix"}],
+                    }
+                ]
+            }
+        )
+        text = self.fleet.status("s-1")["last_assistant_text"]
+        self.assertIsNotNone(text)
+        self.assertNotIn("\u2014", text)
+        self.assertNotIn("\u2013", text)
+        self.assertEqual(text, "bagus - tapi - perlu fix")
+
 
 if __name__ == "__main__":
     unittest.main()

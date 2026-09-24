@@ -628,12 +628,12 @@ class Orchestrator:
                 rec["started_at"] = time.monotonic()
             if task.isolate and rec["attempts"] == 1:
                 self._ensure_worktree(task, tid)
-            elif rec["attempts"] == 1:
-                # A shared workdir is a shared baseline. Commit whatever the
-                # previous task left behind, so the next agent starts from a
-                # clean slate and ownership can be attributed to the right
-                # agent. Without this, agent B is blamed for agent A's dirty
-                # files - the exact boundary failure this feature prevents.
+            elif task.owns and rec["attempts"] == 1:
+                # A shared workdir is a shared baseline, but only boundary
+                # enforcement needs a clean one. Task B would otherwise see
+                # task A's dirty files and be blamed for crossing a lane it
+                # never touched. Tasks without `owns` keep the old behaviour:
+                # their workdir is left exactly as the caller set it up.
                 self._refresh_baseline(task.workdir, tid)
             setup_error = self._run_hooks(task.setup, task.workdir, task.env)
             if setup_error:

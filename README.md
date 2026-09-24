@@ -131,6 +131,39 @@ o.add(Task(id="a", prompt="...", workdir="/repo", repo="/repo",
            isolate=True))  # automatically creates an isolated worktree
 ```
 
+### Ownership boundaries keep parallel agents out of each other's lanes
+
+Context in a prompt is a suggestion; an agent can ignore it. When several
+agents work the same repository, each one is confined to a declared set of
+paths and the fleet enforces it mechanically:
+
+```python
+o.add(Task(id="backend", prompt="build the API", workdir="/repo",
+           owns=["backend/**"], isolate=True, repo="/repo",
+           verify=["pytest backend"]))
+o.add(Task(id="frontend", prompt="build the UI", workdir="/repo",
+           owns=["frontend/**"], isolate=True, repo="/repo",
+           verify=["npm test"], handoff=True))
+```
+
+After an agent finishes, the orchestrator reads the changed files from the
+artifact manifest and checks them against `owns`:
+
+- every changed file matches an owned pattern -> the task proceeds as usual;
+- any file falls outside `owns` -> the task fails with `verification_failed`
+  and `boundary["verdict"] == "boundary_violation"`, naming the offending
+  files in `boundary["violations"]`.
+
+`owns` is empty by default, which means no restriction (the old behaviour).
+Boundary checks also run when the agent fails or times out, so a failed agent
+that overstepped still reports the overstep.
+
+When tasks share a workdir without `isolate=True`, the orchestrator refreshes
+the Git baseline before each `owns`-scoped task starts, so one agent's changes
+are never attributed to the next. `owns` and `isolate=True` together are the
+safe combination: a private worktree per lane, and a mechanical check that
+each lane stayed inside its own fences.
+
 ## Configuration: models by role
 
 `~/.config/oc-fleet/config.json` is used for role-specific models and runtime

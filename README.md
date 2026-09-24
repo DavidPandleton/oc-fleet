@@ -171,6 +171,31 @@ attempts use entries from `fallbacks` in order. This is useful when the error
 comes from a provider, such as `provider.invalid-request` with empty content,
 rather than from the prompt. Retrying the same model would only waste time.
 
+### A retry carries the reason the last one failed
+
+Re-sending the identical prompt is a coin flip. If attempt 1 failed because
+the agent misread a constraint, attempt 2 repeats the same misreading with
+no way to know it is repeating. The foreman already holds the evidence - it
+classified the failure, it has the agent's last message, and it has the
+verification stderr - so attempt N>1 is the original prompt plus a bounded
+"previous attempt failed" block:
+
+```
+Previous attempt 1 of this task FAILED. Do not repeat it.
+failed_model: cutad/deepseek-v4-flash
+failure_class: agent_failed
+agent_status: failed
+agent_last_message:
+<the agent's own last words>
+verification_failed:
+- <the exact command that failed>
+  <its stderr>
+```
+
+Attempt 1 is byte-for-byte the original prompt, so a run that never fails is
+unaffected. The whole prompt is clamped to the same budget as a handoff, so
+a runaway transcript cannot drown the actual task.
+
 Tasks running in parallel on the same repository can be isolated with Git
 worktrees:
 

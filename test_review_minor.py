@@ -95,16 +95,25 @@ class PendingInsertIndexTest(unittest.TestCase):
 
     def test_retry_preserves_task_order(self):
         class FailOnce:
+            """Session ids come from a counter, not the prompt.
+
+            Binding a session id to the prompt text made this test break
+            the moment a retry carried context (the prompt is no longer
+            the single byte it used to be). Keying on a counter keeps the
+            test about task ORDER, which is what it claims to check.
+            """
+
             def __init__(self):
-                self.calls = {}
+                self.n = 0
 
             def dispatch(self, prompt, workdir, title="", model=""):
-                self.calls[prompt] = self.calls.get(prompt, 0) + 1
-                return "%s-%d" % (prompt, self.calls[prompt])
+                self.n += 1
+                self.last = "s%d" % self.n
+                return self.last
 
             def status(self, sid):
                 # The first attempt of task "a" fails; everything else succeeds.
-                if sid.endswith("-1") and sid.startswith("a"):
+                if sid == "s1":
                     return {"outcome": "crashed", "last_assistant_text": "boom"}
                 return {"outcome": "succeeded", "last_assistant_text": "ok"}
 

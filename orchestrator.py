@@ -690,21 +690,88 @@ class Orchestrator:
                 )
         return None
 
-    def _prompt_for_task(self, task):
-        if not task.handoff or not task.depends_on:
-            return task.prompt
-        lines = [task.prompt, "", "Upstream task evidence:"]
-        for dep in task.depends_on:
-            record = self._results[dep]
-            artifacts = record.get("artifacts") or {}
-            verification = record.get("verification") or {}
-            lines.extend([
-                "Upstream task: %s" % dep,
-                "status: %s" % record.get("status"),
-                "files_changed: %s" % ", ".join(artifacts.get("files_changed", [])),
-                "verification: %s" % verification,
-            ])
-        return "\n".join(lines)[:12000]
+    def _prompt_for_task(self, task, rec=None):
+        """Rakit prompt untuk sebuah attempt.
+
+        Attempt 1 adalah prompt asli apa adanya. Attempt berikutnya
+        menambahkan ringkasan kegagalan sebelumnya: agent yang mengulang
+        tanpa tahu apa yang gagal akan mengulang kesalahan yang sama.
+        Blok ini dibatasi supaya transkrip raksasa tidak menenggelamkan
+        instruksi sebenarnya.
+        """
+        base = task.prompt
+        if task.handoff and task.depends_on:
+            lines = [base, "", "Upstream task evidence:"]
+            for dep in task.depends_on:
+                record = self._results[dep]
+                artifacts = record.get("artifacts") or {}
+                verification = record.get("verification") or {}
+                lines.extend([
+                    "Upstream task: %s" % dep,
+                    "status: %s" % record.get("status"),
+                    "files_changed: %s" % ", ".join(artifacts.get("files_changed", [])),
+                    "verification: %s" % verification,
+                ])
+            base = "\n".join(lines)
+        base = base[:12000]
+
+        context = self._retry_context(task, rec)
+        if context:
+            return "%s\n\n%s" % (base, context)[:12000]
+        return base
+
+    def _retry_context(self, task, rec):
+        """Blok 'previous attempt failed' untuk attempt N>1, atau ''.
+
+        Sumber kebenaran ada di record: `attempts_detail` menyimpan model
+        tiap attempt, `failure_class` kategori kegagalannya, `last_text`
+        kata-kata terakhir agent, dan `verification` keluaran perintah
+        verifikasi. Semua itu yang paling berguna untuk attempt berikutnya.
+        """
+        if not rec or rec.get("attempts", 1) <= 1:
+            return ""
+        previous = rec["attempts"] - 1
+        detail = (rec.get("attempts_detail") or [])
+        failed_model = None
+        failed_class = None
+        for entry in reversed(detail):
+            if entry.get("attempt") == previous:
+                failed_model = entry.get("model")
+                failed_class = entry.get("failure_class")
+                break
+        if failed_model is None:
+            failed_model = model_for_attempt(task, previous)
+        if failed_class is None:
+            failed_class = rec.get("failure_class")
+
+        lines = [
+            "Previous attempt %d of this task FAILED. Do not repeat it." % previous,
+            "failed_model: %s" % (failed_model or "unknown"),
+            "failure_class: %s" % (failed_class or "unknown"),
+        ]
+        agent_status = rec.get("agent_status")
+        if agent_status:
+            lines.append("agent_status: %s" % agent_status)
+        last_text = (rec.get("last_text") or "").strip()
+        if last_text:
+            lines.append("agent_last_message:")
+            lines.append(last_text[:4000])
+        verification = rec.get("verification")
+        if isinstance(verification, dict) and verification.get("passed") is False:
+            lines.append("verification_failed:")
+            for command in verification.get("commands") or []:
+                if not isinstance(command, dict):
+                    continue
+                # Per-command dict tidak punya `passed`; kegagalan tampak
+                # dari returncode != 0 atau timeout.
+                if command.get("returncode") in (0, None) and not command.get("timed_out"):
+                    continue
+                output = (command.get("stderr") or command.get("stdout") or "").strip()
+                lines.append("- %s" % command.get("command", ""))
+                if output:
+                    lines.append("  %s" % output[:1500])
+        lines.append("Address the failure above in this attempt.")
+        return "\n".join(lines)
 
     def _dispatch_ready(self, pending, running):
         for tid in list(pending):
@@ -737,7 +804,7 @@ class Orchestrator:
             self._persist_event(tid, "task_started", "running", rec)
             try:
                 session_id = self.fleet.dispatch(
-                    self._prompt_for_task(task), task.workdir, title=task.title or tid,
+                    self._prompt_for_task(task, rec), task.workdir, title=task.title or tid,
                     model=(
                         task.model
                         if rec.pop("_retry_same_model", False)

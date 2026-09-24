@@ -69,6 +69,7 @@ class EmptyRunIsNotSuccessTest(unittest.TestCase):
 
 class WorkdirIsPersistedTest(unittest.TestCase):
     def test_a_persisted_task_record_carries_its_workdir(self):
+        """No MCP needed: the orchestrator must write the field itself."""
         repo = _git_repo()
         db = os.path.join(tempfile.mkdtemp(prefix="ocfleet-audit-db-"), "r.db")
         store = RunStore(db)
@@ -78,6 +79,11 @@ class WorkdirIsPersistedTest(unittest.TestCase):
         orch.run()
         back = store.get_task("r", "a")
         self.assertEqual(back.get("workdir"), repo)
+
+
+@unittest.skipUnless(FastMCP is not None, "mcp SDK is not installed")
+class DiffReadsARealRunTest(unittest.TestCase):
+    """MCP-dependent, so guarded: CI does not install the optional SDK."""
 
     def test_diff_works_on_a_run_the_orchestrator_actually_wrote(self):
         """The diff tool must work off a real persisted run, not a seeded row."""

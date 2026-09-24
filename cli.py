@@ -120,6 +120,21 @@ def build_parser():
     p = sub.add_parser("stats", help="totals")
     p.set_defaults(func=cmd_stats)
 
+    p = sub.add_parser("approve", help="record explicit human approval")
+    p.add_argument("run_id")
+    p.add_argument("task_id")
+    p.add_argument("--store", required=True)
+    p.set_defaults(func=cmd_approve)
+
+    p = sub.add_parser("merge", help="explicitly fast-forward an approved task")
+    p.add_argument("run_id")
+    p.add_argument("task_id")
+    p.add_argument("--repo", required=True)
+    p.add_argument("--source", required=True)
+    p.add_argument("--target", default="master")
+    p.add_argument("--store", required=True)
+    p.set_defaults(func=cmd_merge)
+
     return parser
 
 
@@ -176,6 +191,39 @@ def _clip(text, limit=TITLE_MAX):
     if len(text) <= limit:
         return text
     return text[: limit - 3] + "..."
+
+
+def cmd_approve(args):
+    from review import approve
+    from store import RunStore
+
+    store = RunStore(args.store)
+    record = store.get_task(args.run_id, args.task_id)
+    if not approve(record):
+        print("error: task is not verification-passed", file=sys.stderr)
+        return 1
+    store.record_approval(args.run_id, args.task_id, {"approved": True})
+    print("approved: %s/%s" % (args.run_id, args.task_id))
+    return 0
+
+
+def cmd_merge(args):
+    from review import approve, merge
+    from store import RunStore
+
+    store = RunStore(args.store)
+    record = store.get_task(args.run_id, args.task_id)
+    approval = store.get_approval(args.run_id, args.task_id)
+    if not approve(record) or not approval or not approval.get("approved"):
+        print("error: task is not approved and verification-passed", file=sys.stderr)
+        return 1
+    try:
+        result = merge(args.repo, args.source, args.target)
+    except RuntimeError as exc:
+        print("error: %s" % exc, file=sys.stderr)
+        return 1
+    print("merged: %s" % result["source"])
+    return 0
 
 
 def cmd_status(args):

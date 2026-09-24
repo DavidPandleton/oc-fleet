@@ -51,6 +51,12 @@ class RunStore:
                 payload TEXT NOT NULL,
                 PRIMARY KEY (run_id, task_id)
             );
+            CREATE TABLE IF NOT EXISTS approvals (
+                run_id TEXT NOT NULL,
+                task_id TEXT NOT NULL,
+                payload TEXT NOT NULL,
+                PRIMARY KEY (run_id, task_id)
+            );
             INSERT OR IGNORE INTO schema_meta(key, value)
                 VALUES ('schema_version', '1');
             """
@@ -133,6 +139,21 @@ class RunStore:
     def get_artifact(self, run_id, task_id):
         row = self.connection.execute(
             "SELECT payload FROM artifacts WHERE run_id = ? AND task_id = ?",
+            (run_id, task_id),
+        ).fetchone()
+        return self._decode(row["payload"]) if row else None
+
+    def record_approval(self, run_id, task_id, payload):
+        with self.connection:
+            self.connection.execute(
+                "INSERT INTO approvals(run_id, task_id, payload) VALUES (?, ?, ?) "
+                "ON CONFLICT(run_id, task_id) DO UPDATE SET payload=excluded.payload",
+                (run_id, task_id, json.dumps(payload, sort_keys=True)),
+            )
+
+    def get_approval(self, run_id, task_id):
+        row = self.connection.execute(
+            "SELECT payload FROM approvals WHERE run_id = ? AND task_id = ?",
             (run_id, task_id),
         ).fetchone()
         return self._decode(row["payload"]) if row else None

@@ -403,6 +403,7 @@ class Orchestrator:
                 raise ValueError("task %r has an empty prompt" % tid)
             if not isinstance(task.workdir, str) or not task.workdir.strip():
                 raise ValueError("task %r has an empty workdir" % tid)
+            self._validate_task_contract(task, tid)
             for dep in task.depends_on:
                 if dep not in self._tasks:
                     raise ValueError("task %r depends on unknown task %r" % (tid, dep))
@@ -410,6 +411,63 @@ class Orchestrator:
         if cycle:
             raise ValueError("dependency cycle detected: %s" % " -> ".join(cycle))
         self._reject_ownership_overlap()
+
+    def _validate_task_contract(self, task, tid):
+        """Tolak task yang secara struktural tidak bisa berhasil.
+
+        Semua hal di sini bisa diketahui sebelum dispatch. Menangkapnya
+        di sini menghabiskan satu baris output; menangkapnya di tengah run
+        menghabiskan satu slot, satu sesi, dan kejernihan pohon bersama
+        yang sudah setengah tertulis.
+        """
+        # Angka yang tidak bisa berarti apa-apa.
+        if task.retries < 0:
+            raise ValueError("task %r has negative retries: %r" % (tid, task.retries))
+        if not isinstance(task.timeout, (int, float)) or task.timeout <= 0:
+            raise ValueError(
+                "task %r needs a positive timeout, got %r" % (tid, task.timeout)
+            )
+        if task.verify and (
+            not isinstance(task.verify_timeout, (int, float))
+            or task.verify_timeout <= 0
+        ):
+            raise ValueError(
+                "task %r needs a positive verify_timeout, got %r"
+                % (tid, task.verify_timeout)
+            )
+        # Fallback yang mengulang model yang sama membuang satu attempt
+        # tanpa harapan berhasil; kalau model itu penyebab gagalnya, ini
+        # cuma memperlambat kegagalan yang sama.
+        seen_models = {task.model}
+        for fb in task.fallbacks:
+            if not isinstance(fb, str) or not fb.strip():
+                raise ValueError("task %r has an empty fallback model" % tid)
+            if fb in seen_models:
+                raise ValueError(
+                    "task %r fallback %r repeats an earlier model; a retry "
+                    "on the same model cannot help" % (tid, fb)
+                )
+            seen_models.add(fb)
+        # `owns` adalah pagar; pola yang keluar dari workdir melubangi pagar.
+        for pattern in task.owns:
+            if not isinstance(pattern, str) or not pattern.strip():
+                raise ValueError("task %r has an empty owns pattern" % tid)
+            if os.path.isabs(pattern) or pattern.startswith("/"):
+                raise ValueError(
+                    "task %r owns pattern %r is absolute; owns patterns are "
+                    "relative to the workdir" % (tid, pattern)
+                )
+            escaped = pattern.replace(os.sep, "/")
+            if escaped == ".." or escaped.startswith("../") or "/../" in escaped:
+                raise ValueError(
+                    "task %r owns pattern %r escapes the workdir" % (tid, pattern)
+                )
+        # Perintah verifikasi harus benar-benar bisa dijalankan.
+        for command in task.verify:
+            if not isinstance(command, str) or not command.strip():
+                raise ValueError(
+                    "task %r has an empty verify command" % tid
+                )
 
     def _reject_ownership_overlap(self):
         """Tolak dua task di workdir sama yang wilayah tulisnya bertabrakan.

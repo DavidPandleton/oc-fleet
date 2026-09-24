@@ -244,6 +244,22 @@ dispatched, naming both tasks and the clashing patterns. A boundary that two
 agents both claim is not a boundary; catching it up front is cheaper than
 untangling a collision mid-run.
 
+### A task that cannot work is refused before it costs a session
+
+`validate()` also refuses a task whose own fields cannot mean anything. A
+negative `retries`, a non-positive `timeout`, a non-positive `verify_timeout`
+on a task that has `verify` commands, an empty `verify` command, an empty
+`owns` pattern, a `fallbacks` entry that repeats a model already in the chain,
+or an `owns` pattern that is absolute or climbs out of the workdir with `..`.
+Each of these is knowable from the task alone, and each one, left uncaught,
+buys a whole session before it fails.
+
+The check is deliberately structural: it reads the task, never the machine.
+`validate()` does not `stat()` the workdir, so a plan can be written and
+reviewed on a machine that will not run it. What a task *promises* is checked
+here; whether this machine can *keep* that promise is the executor's problem,
+not the plan's.
+
 ## Configuration: models by role
 
 `~/.config/oc-fleet/config.json` is used for role-specific models and runtime

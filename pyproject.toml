@@ -8,9 +8,11 @@ version = "0.1.0"
 description = "Fleet manager untuk OpenCode agents via HTTP API"
 readme = "README.md"
 requires-python = ">=3.9"
+dependencies = ["mcp>=1.26,<2"]
 
 [project.scripts]
 oc-fleet = "cli:main"
+oc-fleet-mcp = "mcp_server:main"
 
 [tool.setuptools]
-py-modules = ["fleet", "endpoint", "ratelimit", "orchestrator", "prompt_lint", "config", "worktree", "contracts", "artifacts", "failures", "store", "events", "pricing", "accounting", "review", "cli"]
+py-modules = ["fleet", "endpoint", "ratelimit", "orchestrator", "prompt_lint", "config", "worktree", "contracts", "artifacts", "failures", "store", "events", "pricing", "accounting", "review", "mcp_server", "cli"]

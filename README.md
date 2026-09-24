@@ -73,6 +73,22 @@ For example, an agent asked to parse durations may be given valid forms but
 not told what `"1h1h"` means. It can invent a rule that units must be in
 descending order, reject legal input, and then mark its own tests as passing.
 
+Three more rules measure a task that is too large for one session, the shape
+that produced an 18-minute silent `scaffold` in the coffee-catalog run:
+
+| Rule | Detects |
+|---|---|
+| `BIG-TASK-MANY-STEPS` | Four or more ordered steps chained into one task |
+| `BIG-TASK-MANY-ARTEFACTS` | Five or more distinct files named in one task |
+| `BIG-TASK-NO-CHECKPOINT` | A large task with no stopping point to verify partway |
+
+All three are warnings, never errors. A large prompt is a smell, not a syntax
+error, and only the foreman knows whether splitting it is worth an extra
+dispatch. The thresholds sit above the two-file, two-step prompts that already
+work, so the rule adds signal without flagging every clean task. When a task
+this size fails, there is no smaller unit to point at, so a failure names one
+step instead of the whole build.
+
 ## Orchestrator
 
 ```python

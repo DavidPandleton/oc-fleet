@@ -191,6 +191,41 @@ RULES: list[tuple[str, str, str, str, str]] = [
         "Verify against a grader written before the implementation, by a "
         "different party, or against an external ground truth.",
     ),
+    # The rules below come from the coffee-catalog run, where one task,
+    # `scaffold`, ran 18 minutes in silence and came back
+    # verification_failed after two attempts. It was one session asked to
+    # lay down a whole app. These rules measure the prompt for that shape
+    # and warn. They never error: a big task is a smell, not a syntax
+    # error, and only the foreman knows whether splitting it is worth an
+    # extra dispatch.
+    (
+        "BIG-TASK-MANY-STEPS",
+        "warn",
+        r"^\d+\+?\s*\w+",
+        "Four or more ordered steps in one task usually means several "
+        "sessions' work behind one session id.",
+        "Split it: give each step its own task with a depends_on edge, so a "
+        "failure names one step instead of the whole build.",
+    ),
+    (
+        "BIG-TASK-MANY-ARTEFACTS",
+        "warn",
+        r"^\w+\.\w{1,4}\b",
+        "Five or more distinct artefacts in one task means the agent holds "
+        "every file's contract in one head before any of them can be "
+        "verified.",
+        "Split by artefact or by module, and verify each before the next "
+        "starts.",
+    ),
+    (
+        "BIG-TASK-NO-CHECKPOINT",
+        "warn",
+        r"^\w+",
+        "A large task with no checkpoint is all-or-nothing: if the last "
+        "step fails, no earlier work is provably good.",
+        "Name a stopping point ('after step 2, run the smoke test') or split "
+        "into tasks that each end in a check.",
+    ),
 ]
 
 
@@ -314,6 +349,80 @@ def _is_negated(text: str, pattern: str) -> bool:
     return True
 
 
+def _big_task_findings(prompt: str) -> list[Finding]:
+    """Warn when one session is asked to do several sessions' work.
+
+    Two measurements, both deliberately crude, because a lint that needs
+    a parser to run is a lint that never runs:
+
+    * steps - numbered items ("1.", "Step 2:", "3)") plus the sequence
+      words an author uses instead of numbering ("then", "next",
+      "finally").
+    * artefacts - distinct file names (``name.ext``) mentioned anywhere.
+
+    The thresholds sit above the two-artefact, two-step prompts that
+    already work, so the finding is signal, not noise. A checkpoint is
+    any instruction to stop and check something partway ("after step 2,
+    run the tests", "verify X before Y"), which is what makes a large
+    task safe instead of all-or-nothing.
+    """
+    findings: list[Finding] = []
+
+    # "Step 3" anywhere counts; a bare "1." only at line start, so a
+    # decimal like 1.5 in prose is not read as a step.
+    numbered = re.findall(r"\bstep\s+\d+\b", prompt, re.IGNORECASE)
+    numbered += re.findall(r"(?m)^\s*\d+[.)]\s", prompt)
+    sequence = re.findall(r"\b(?:then|next|after that|finally)\b", prompt, re.IGNORECASE)
+    steps = len(numbered) + len(sequence)
+
+    artefacts = {m.lower() for m in re.findall(r"\b[\w-]+\.[a-z]{1,4}\b", prompt)}
+
+    has_checkpoint = bool(
+        re.search(
+            r"\b(?:stop|checkpoint|before continuing|before you continue|"
+            r"verify\s+\w+\s+before|run the (?:smoke )?tests? (?:first|before)|"
+            r"after (?:step|that,?\s*(?:first|stop)))\b",
+            prompt,
+            re.IGNORECASE,
+        )
+    )
+
+    big = steps >= 4 or len(artefacts) >= 5
+
+    if steps >= 4:
+        findings.append(
+            Finding(
+                "BIG-TASK-MANY-STEPS",
+                "warn",
+                "This prompt chains %d ordered steps into one task." % steps,
+                "Split it: give each step its own task with a depends_on "
+                "edge, so a failure names one step instead of the whole build.",
+            )
+        )
+    if len(artefacts) >= 5:
+        findings.append(
+            Finding(
+                "BIG-TASK-MANY-ARTEFACTS",
+                "warn",
+                "This prompt names %d distinct artefacts." % len(artefacts),
+                "Split by artefact or by module, and verify each before the "
+                "next starts.",
+            )
+        )
+    if big and not has_checkpoint:
+        findings.append(
+            Finding(
+                "BIG-TASK-NO-CHECKPOINT",
+                "warn",
+                "A large task with no checkpoint is all-or-nothing: if the "
+                "last step fails, no earlier work is provably good.",
+                "Name a stopping point ('after step 2, run the smoke test') or "
+                "split into tasks that each end in a check.",
+            )
+        )
+    return findings
+
+
 def lint(prompt: str) -> list[Finding]:
     """Lint a dispatch prompt. Returns findings, most severe first.
 
@@ -350,6 +459,11 @@ def lint(prompt: str) -> list[Finding]:
 
     for rule_id, severity, pattern, message, suggestion in RULES:
         if pattern == "^":
+            continue
+        # The BIG-TASK rules are measured in `_big_task_findings`, not by
+        # a regex: they need a count across the whole prompt, not a match
+        # on one line. Their `pattern` is documentation, not a matcher.
+        if rule_id.startswith("BIG-TASK-"):
             continue
         if re.search(pattern, prompt, flags=re.IGNORECASE | re.MULTILINE):
             # Rules whose pattern names something the prompt may instead be
@@ -415,6 +529,8 @@ def lint(prompt: str) -> list[Finding]:
                 "author name plus email if you want one.",
             )
         )
+
+    findings.extend(_big_task_findings(prompt))
 
     order = {"error": 0, "warn": 1, "info": 2}
     findings.sort(key=lambda f: order[f.severity])

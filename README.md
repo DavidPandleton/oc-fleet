@@ -100,6 +100,24 @@ risks (missing verification, retry with the same model, shared workdir).
 agent, so an invalid dependency, cycle, or empty workdir fails fast.
 ``run(dry_run=True)`` prints the same map.
 
+### A run reports whether it actually succeeded
+
+``run_status()`` condenses the whole run into one exit code a shell script or
+CI step can act on:
+
+| code | meaning |
+|------|---------|
+| 0 | every task succeeded and every required verification passed |
+| 1 | an agent failed, timed out, or a setup hook failed (no verification failure) |
+| 2 | a verification failed, including a boundary violation |
+| 3 | preflight refused the run (validate/plan raised; nothing was dispatched) |
+
+A task that both failed as an agent and broke its artifact contract is
+reported as `verification_failed` (code 2), the more actionable condition,
+while `agent_status` keeps the agent's own verdict so neither fact is lost.
+Calling `run_status()` before `run()` returns 1, not 0: a run that produced
+nothing must never look like a success.
+
 ### Verification is about the artifact, not the agent
 
 Verification commands run whenever the agent had a chance to write to the

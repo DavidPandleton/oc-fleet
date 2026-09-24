@@ -320,6 +320,7 @@ class Orchestrator:
         self._store = store
         self._run_id = run_id
         self._event_sink = event_sink
+        self._preflight_failed = False
 
         # Pasang pembatas pada klien kalau belum ada. Tanpa ini, oc-fleet
         # membanjiri server dengan pollingnya sendiri dan mendapat 429 -
@@ -526,8 +527,15 @@ class Orchestrator:
 
         Returns the topological order (dry_run) or the results() dict.
         """
-        self.validate()
-        plan = self.plan()
+        try:
+            self.validate()
+            plan = self.plan()
+        except ValueError:
+            # Preflight refused the run. Record it so run_status() can
+            # report code 3 to a caller instead of pretending nothing
+            # happened; then let the error surface to the caller.
+            self._preflight_failed = True
+            raise
         if dry_run:
             return self._print_plan(plan)
         self._persist_run("running")
@@ -910,6 +918,31 @@ class Orchestrator:
             pending.insert(self._task_order.index(tid), tid)
             print("retrying: %s (attempt %d of %d)" % (tid, rec["attempts"] + 1, task.retries + 1))
             return
+
+        # The agent failed and we are out of retries. Before calling it a
+        # plain agent failure, check whether the artifact contract also
+        # failed. Both are true; the status reports the more severe one and
+        # `agent_status` keeps the agent's own verdict, so neither fact is
+        # lost. Reporting only "failed" here would bury a boundary violation
+        # or a failing verification under a generic agent failure.
+        boundary_broken = bool(rec.get("boundary") and rec["boundary"].get("verdict"))
+        artifact_broken = (
+            verification is not None and verification.required and not verification.passed
+        )
+        if boundary_broken or artifact_broken:
+            rec["failure_class"] = classify_failure(verification_failed=True)
+            rec["status"] = "verification_failed"
+            self._persist_event(tid, "task_finished", rec["status"], rec)
+            if boundary_broken:
+                print(
+                    "boundary violation: %s wrote outside %s (%s)"
+                    % (tid, task.owns, ", ".join(rec["boundary"]["violations"]))
+                )
+            else:
+                print("verification failed: %s (agent also %s)"
+                      % (tid, rec["agent_status"]))
+            return
+
         rec["status"] = "failed"
         if outcome is None:
             if timed_out:
@@ -1024,6 +1057,41 @@ class Orchestrator:
           did.
         """
         return {tid: dict(rec) for tid, rec in self._results.items()}
+
+    def run_status(self):
+        """Ringkas hasil run jadi satu kode keluar untuk pemanggil program.
+
+        Kontraknya:
+
+        * 3 - preflight menolak run (validate/plan melempar sebelum ada
+          dispatch); tidak ada agent yang jalan;
+        * 2 - ada verification yang gagal (termasuk pelanggaran boundary);
+        * 1 - ada agent yang gagal, timeout, atau setup gagal, tetapi
+          tidak ada verification yang gagal;
+        * 0 - semua task sukses dan semua verification yang diwajibkan
+          lolos.
+
+        Kalau run belum pernah dijalankan, hasil task masih "pending"
+        dan dianggap belum sukses, sehingga kode 1 - bukan 0. Pemanggil
+        tidak boleh menyimpulkan sukses dari run yang tak menghasilkan
+        apa pun.
+
+        Kode 2 sengaja di atas 1: verification gagal berarti artefak
+        tidak memenuhi kontrak, terlepas dari agent-nya sukses atau
+        tidak, dan itu kondisi yang lebih parah untuk dilaporkan.
+        """
+        if self._preflight_failed:
+            return 3
+        saw_agent_failure = False
+        for tid in self._task_order:
+            rec = self._results[tid]
+            status = rec["status"]
+            if status == "verification_failed":
+                return 2
+            if status in ("failed", "timed_out", "setup_failed", "skipped",
+                          "pending", "running"):
+                saw_agent_failure = True
+        return 1 if saw_agent_failure else 0
 
     def summary(self):
         """Return a human readable multi-line status summary."""

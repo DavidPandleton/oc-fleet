@@ -112,7 +112,14 @@ class OwnershipTest(unittest.TestCase):
             self.assertNotIn("backend/app.py", result["boundary"]["violations"])
 
     def test_boundary_violation_recorded_even_when_agent_failed(self):
-        """A failed agent that overstepped still reports the overstep."""
+        """A failed agent that overstepped still reports the overstep.
+
+        The status becomes `verification_failed`: a broken lane is a
+        broken artifact contract, and burying it under the agent's own
+        failure would hide the more actionable problem. The agent's own
+        verdict is preserved separately in `agent_status`, so neither
+        fact is lost.
+        """
         with tempfile.TemporaryDirectory() as workdir:
             init_repo(workdir)
             result = self._run(workdir, Task(
@@ -120,7 +127,8 @@ class OwnershipTest(unittest.TestCase):
                 owns=["backend/**"],
                 setup=[self._agent_write("frontend/main.ts")],
             ), outcome="failed")
-            self.assertEqual(result["status"], "failed")
+            self.assertEqual(result["status"], "verification_failed")
+            self.assertEqual(result["agent_status"], "failed")
             self.assertEqual(result["boundary"]["verdict"], "boundary_violation")
 
     def test_two_agents_in_disjoint_lanes_both_pass(self):

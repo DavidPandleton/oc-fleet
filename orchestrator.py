@@ -20,6 +20,7 @@ from dataclasses import dataclass, field
 from shlex import split as shell_split
 
 from contracts import VerificationResult
+from failures import classify_failure
 from fleet import Fleet
 from ratelimit import ConcurrencyLimiter, RateLimiter
 
@@ -196,6 +197,8 @@ def _new_record():
             "commands": [],
         },
         "artifacts": None,
+        "failure_class": None,
+        "attempts_detail": [],
     }
 
 
@@ -449,7 +452,11 @@ class Orchestrator:
             try:
                 session_id = self.fleet.dispatch(
                     self._prompt_for_task(task), task.workdir, title=task.title or tid,
-                    model=model_for_attempt(task, rec["attempts"]),
+                    model=(
+                        task.model
+                        if rec.pop("_retry_same_model", False)
+                        else model_for_attempt(task, rec["attempts"])
+                    ),
                 )
             except DISPATCH_ERRORS as exc:
                 session_id = None
@@ -541,6 +548,18 @@ class Orchestrator:
         rec = self._results[tid]
         outcome = state.get("outcome") if isinstance(state, dict) else None
         rec["outcome"] = outcome
+        attempt_failure = classify_failure(
+            outcome=outcome,
+            timed_out=timed_out,
+        ) if outcome in FAILED_OUTCOMES or timed_out else None
+        rec["attempts_detail"].append({
+            "attempt": rec["attempts"],
+            "model": model_for_attempt(task, rec["attempts"]),
+            "session_id": rec.get("session_id"),
+            "failure_class": attempt_failure,
+        })
+        if attempt_failure:
+            rec["failure_class"] = attempt_failure
         if isinstance(state, dict) and state.get("last_assistant_text") is not None:
             rec["last_text"] = state["last_assistant_text"]
         rec["finished_at"] = time.monotonic()
@@ -557,8 +576,15 @@ class Orchestrator:
 
             rec["artifacts"] = collect_manifest(task.workdir).to_dict()
             if verification.required and not verification.passed:
+                rec["failure_class"] = classify_failure(verification_failed=True)
                 rec["status"] = "verification_failed"
-                print("verification failed: %s" % tid)
+                if rec["attempts"] <= task.retries:
+                    rec["_retry_same_model"] = True
+                    rec["status"] = "pending"
+                    pending.insert(self._task_order.index(tid), tid)
+                    print("retrying: %s after verification failure" % tid)
+                else:
+                    print("verification failed: %s" % tid)
                 return
             rec["status"] = "verification_passed" if verification.required else "succeeded"
             print(

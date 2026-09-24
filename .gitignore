@@ -3,6 +3,7 @@ __pycache__/
 .venv/
 
 build/
+dist/
 *.egg-info/
 
 # Benchmark output. One example run is committed as example.json; every

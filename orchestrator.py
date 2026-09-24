@@ -159,6 +159,8 @@ class Task:
     # Independent verification commands run after the agent succeeds.
     verify: list[str] = field(default_factory=list)
     verify_timeout: float = 300.0
+    # Inject a bounded, typed summary of successful dependencies into prompt.
+    handoff: bool = False
     # Bila True, orchestrator membuat git worktree baru dari `repo`
     # sebelum dispatch pertama dan memakai path itu sebagai workdir,
     # supaya agent paralel tidak menulis ke direktori yang sama.
@@ -413,6 +415,22 @@ class Orchestrator:
     def _is_success(record):
         return record.get("status") in ("succeeded", "verification_passed")
 
+    def _prompt_for_task(self, task):
+        if not task.handoff or not task.depends_on:
+            return task.prompt
+        lines = [task.prompt, "", "Upstream task evidence:"]
+        for dep in task.depends_on:
+            record = self._results[dep]
+            artifacts = record.get("artifacts") or {}
+            verification = record.get("verification") or {}
+            lines.extend([
+                "Upstream task: %s" % dep,
+                "status: %s" % record.get("status"),
+                "files_changed: %s" % ", ".join(artifacts.get("files_changed", [])),
+                "verification: %s" % verification,
+            ])
+        return "\n".join(lines)[:12000]
+
     def _dispatch_ready(self, pending, running):
         for tid in list(pending):
             if len(running) >= self.max_parallel:
@@ -430,7 +448,7 @@ class Orchestrator:
                 self._ensure_worktree(task, tid)
             try:
                 session_id = self.fleet.dispatch(
-                    task.prompt, task.workdir, title=task.title or tid,
+                    self._prompt_for_task(task), task.workdir, title=task.title or tid,
                     model=model_for_attempt(task, rec["attempts"]),
                 )
             except DISPATCH_ERRORS as exc:

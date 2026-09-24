@@ -84,6 +84,18 @@ class RunStore:
         ).fetchone()
         return self._decode(row["payload"]) if row else None
 
+    def list_runs(self):
+        """Return every run as (run_id, payload), ordered by run_id.
+
+        There is no timestamp column, so "most recent" is not knowable
+        here; the caller gets them id-sorted and decides for itself.
+        Claiming a recency order the schema cannot support would be a lie.
+        """
+        rows = self.connection.execute(
+            "SELECT run_id, payload FROM runs ORDER BY run_id"
+        ).fetchall()
+        return [(row["run_id"], self._decode(row["payload"])) for row in rows]
+
     def upsert_task(self, run_id, task_id, payload):
         with self.connection:
             self.connection.execute(

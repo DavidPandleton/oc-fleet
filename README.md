@@ -379,6 +379,31 @@ password is discovered in this order: `OPENCODE_SERVER_PASSWORD`,
 `/tmp/oc_serve.log`, `~/.local/share/opencode/serve.log`, and finally
 `~/.config/opencode/service.json`.
 
+## MCP interface
+
+`oc-fleet-mcp --store PATH` speaks MCP over stdio, so a foreman agent can
+drive the fleet without writing glue Python. Tools:
+
+| Tool | Kind | Does |
+|---|---|---|
+| `oc_fleet_runs` | read | List persisted runs with their status. |
+| `oc_fleet_status` | read | One run's status and exit code (`0/1/2`), no dispatch. |
+| `oc_fleet_run_show` | read | One run plus its task records. |
+| `oc_fleet_results` | read | Persisted task results for a run. |
+| `oc_fleet_events` | read | Structured lifecycle events for a run. |
+| `oc_fleet_diff` | read | Diff, changed files, and conflicts for a task's workdir. |
+| `oc_fleet_dispatch` | mutation | Dispatch one task. Needs an explicit `workdir`. |
+| `oc_fleet_run_dag` | mutation | Run a small DAG. Needs an explicit `workdir`. |
+| `oc_fleet_cancel` | mutation | Cancel one named session. |
+| `oc_fleet_approve` | mutation | Record approval, only for a `verification_passed` task. |
+| `oc_fleet_merge` | mutation | Fast-forward a branch, only after a recorded approval. |
+
+Read tools are separated from mutation tools on purpose, and the mutation
+tools refuse ambiguity: no shell execution, no implicit workdir, no merge
+without an approval, and a `merge` target must be a plain branch name so a
+path cannot be smuggled in where a branch is expected. Errors come back as
+`{"error": ...}` rather than raising.
+
 ## Compatibility and upgrades
 
 Two documents cover what stays stable across versions:

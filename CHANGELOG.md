@@ -9,6 +9,25 @@ covers a change that makes a previously valid run behave differently: a
 task that used to succeed may now be refused at preflight, or a status a
 consumer used to read may be renamed. Those are called out under `Changed`.
 
+## [Unreleased]
+
+### Added
+
+- The MCP surface now matches the plan: `oc_fleet_status`, `oc_fleet_runs`,
+  `oc_fleet_diff`, `oc_fleet_run_dag`, `oc_fleet_approve`, and
+  `oc_fleet_merge` join the original five tools. Read tools are separate
+  from mutation tools; `approve` requires a `verification_passed` task
+  with artifacts, `merge` requires a recorded approval, and `merge` target
+  must be a plain branch name.
+- `RunStore.list_runs()`.
+
+### Fixed
+
+- `review.diff()` reported nothing for a file git had not tracked yet,
+  which is what an agent creates most of the time. A task that wrote three
+  new files showed an empty diff. Untracked paths are now listed, matching
+  what the artifact manifest already collected.
+
 ## [0.2.0] - 2026-09-24
 
 ### Added

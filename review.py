@@ -13,9 +13,28 @@ def _git(workdir, *args):
 
 
 def diff(workdir):
+    """Stat of what changed, including files git does not track yet.
+
+    `git diff --stat HEAD` alone reports nothing for a brand-new file,
+    which is exactly what an agent creates most of the time. An empty
+    diff for a task that wrote three new files reads as "no work done",
+    so untracked paths are listed explicitly, the same way the artifact
+    manifest collects them.
+    """
     result = _git(workdir, "diff", "--no-ext-diff", "--stat", "HEAD")
     if result.returncode:
         raise RuntimeError((result.stderr or "git diff failed").strip())
+    untracked = _git(
+        workdir, "ls-files", "--others", "--exclude-standard"
+    )
+    if untracked.returncode:
+        raise RuntimeError((untracked.stderr or "git ls-files failed").strip())
+    new_files = [line for line in untracked.stdout.splitlines() if line]
+    if new_files:
+        listing = "\n".join(" %s | new file" % path for path in new_files)
+        header = result.stdout.rstrip()
+        joined = (header + "\n" if header else "") + listing
+        return joined + "\n"
     return result.stdout
 
 

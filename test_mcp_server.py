@@ -3,10 +3,11 @@
 import tempfile
 import unittest
 
-from mcp_server import create_server
+from mcp_server import FastMCP, create_server
 from store import RunStore
 
 
+@unittest.skipUnless(FastMCP is not None, "mcp SDK is not installed")
 class McpServerTest(unittest.TestCase):
     def test_read_only_server_exposes_tools(self):
         with tempfile.NamedTemporaryFile(suffix=".sqlite") as handle:

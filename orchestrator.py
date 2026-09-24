@@ -211,7 +211,7 @@ class Orchestrator:
     def __init__(self, fleet=None, max_parallel=4, poll_interval=POLL_INTERVAL,
                  concurrency_limit=PROVIDER_CONCURRENCY,
                  rate_per_minute=PROVIDER_RATE_PER_MINUTE,
-                 burst=PROVIDER_BURST):
+                 burst=PROVIDER_BURST, store=None, run_id=None):
         if fleet is None:
             fleet = Fleet()
         if int(max_parallel) < 1:
@@ -222,6 +222,8 @@ class Orchestrator:
         self._task_order = []
         self._results = {}
         self._fleet = fleet
+        self._store = store
+        self._run_id = run_id
 
         # Pasang pembatas pada klien kalau belum ada. Tanpa ini, oc-fleet
         # membanjiri server dengan pollingnya sendiri dan mendapat 429 -
@@ -352,14 +354,17 @@ class Orchestrator:
         self.validate()
         if dry_run:
             return self._print_plan()
+        self._persist_run("running")
         pending = list(self._task_order)
         running = {}
         while pending or running:
             self._skip_blocked(pending)
             self._dispatch_ready(pending, running)
             if not running and pending:
-                # unreachable for a validated DAG; guard against infinite loops
-                break
+                # A validated DAG should never reach this state. Do not mark a
+                # partially executed run completed if it does happen.
+                self._persist_run("aborted")
+                raise RuntimeError("orchestrator stalled with pending tasks: %s" % pending)
             self._poll_running(pending, running)
             if running:
                 # Sleep until the next poll, but never past the nearest
@@ -373,7 +378,34 @@ class Orchestrator:
                     sleep_for = max(remaining, 0.0)
                 if sleep_for:
                     time.sleep(sleep_for)
+        self._persist_run("completed")
         return self.results()
+
+    def _persist_run(self, status):
+        if self._store is None or self._run_id is None:
+            return
+        self._store.upsert_run(self._run_id, {
+            "status": status,
+            "tasks": len(self._task_order),
+        })
+        for tid, record in self._results.items():
+            self._store.upsert_task(self._run_id, tid, record)
+
+    def _persist_event(self, task_id, event_type, status, record):
+        if self._store is None or self._run_id is None:
+            return
+        self._store.append_event(self._run_id, {
+            "event_type": event_type,
+            "task_id": task_id,
+            "status": status,
+            "session_id": record.get("session_id"),
+            "attempt": record.get("attempts"),
+        })
+        self._store.upsert_task(self._run_id, task_id, record)
+        if record.get("artifacts") is not None:
+            self._store.upsert_artifact(
+                self._run_id, task_id, record["artifacts"]
+            )
 
     def _print_plan(self):
         order = self.topological_order()
@@ -449,6 +481,7 @@ class Orchestrator:
                 rec["started_at"] = time.monotonic()
             if task.isolate and rec["attempts"] == 1:
                 self._ensure_worktree(task, tid)
+            self._persist_event(tid, "task_started", "running", rec)
             try:
                 session_id = self.fleet.dispatch(
                     self._prompt_for_task(task), task.workdir, title=task.title or tid,
@@ -584,9 +617,11 @@ class Orchestrator:
                     pending.insert(self._task_order.index(tid), tid)
                     print("retrying: %s after verification failure" % tid)
                 else:
+                    self._persist_event(tid, "task_finished", rec["status"], rec)
                     print("verification failed: %s" % tid)
                 return
             rec["status"] = "verification_passed" if verification.required else "succeeded"
+            self._persist_event(tid, "task_finished", rec["status"], rec)
             print(
                 "finished: %s (outcome %s, %s)"
                 % (tid, outcome, self._fmt_duration(rec["duration"]))

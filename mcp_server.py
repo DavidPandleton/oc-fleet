@@ -45,6 +45,31 @@ def create_server(store_path):
         """Return structured lifecycle events for a run."""
         return RunStore(store_path).list_events(run_id)
 
+    @server.tool()
+    def oc_fleet_dispatch(
+        prompt: str,
+        workdir: str,
+        base_url: str,
+        model: str = "",
+        title: str = "",
+    ) -> dict:
+        """Dispatch one explicit OpenCode task; no shell or implicit cwd."""
+        if not prompt.strip() or not workdir.strip() or not base_url.strip():
+            return {"error": "prompt, workdir, and base_url are required"}
+        from fleet import Fleet
+        session_id = Fleet(base_url=base_url).dispatch(
+            prompt, workdir, title=title, model=model
+        )
+        return {"session_id": session_id, "workdir": workdir, "model": model}
+
+    @server.tool()
+    def oc_fleet_cancel(session_id: str, base_url: str) -> dict:
+        """Cancel one explicitly named OpenCode session."""
+        if not session_id.strip() or not base_url.strip():
+            return {"error": "session_id and base_url are required"}
+        from fleet import Fleet
+        return {"session_id": session_id, "cancelled": Fleet(base_url=base_url).cancel(session_id)}
+
     return server
 
 

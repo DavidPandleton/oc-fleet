@@ -2,8 +2,15 @@
 
 import argparse
 import json
+import os
+import sys
 
-from store import RunStore
+# See the note in cli.py: a launched-any-other-way entry point does not get
+# its own directory on sys.path, and this one starts detached, so the
+# ModuleNotFoundError below would be silent.
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+
+from store import RunStore  # noqa: E402
 
 try:
     from mcp.server.fastmcp import FastMCP

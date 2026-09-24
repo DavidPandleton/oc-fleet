@@ -13,6 +13,13 @@ pipx install ~/oss/oc-fleet        # from a local checkout
 oc-fleet stats                     # verify that the server is reachable
 ```
 
+Every entry point inserts its own directory on `sys.path` before importing
+its siblings, so `cli.py`, `mcp_server.py`, and `oc-fleet-wait.py` work
+however they are launched - run directly, through `runpy`, from a symlink
+in `/tmp`, or by `python3 -m` from another directory. A detached runner
+that dies on `ModuleNotFoundError` says nothing, so this is pinned by a
+test rather than left to the accident of how CPython treats a script path.
+
 ## Quick start
 
 ```bash

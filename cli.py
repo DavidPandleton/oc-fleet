@@ -23,7 +23,16 @@ import time
 import urllib.request
 from datetime import datetime, timezone
 
-from fleet import Fleet
+# `python3 cli.py` puts this file's directory on sys.path for free, but a
+# runner that launches the file another way - runpy, an import, a symlink
+# from /tmp, `python3 -m` from elsewhere - does not, and then `from fleet
+# import Fleet` below raises ModuleNotFoundError with no one watching, since
+# this process starts detached. Insert our own directory the way
+# oc-fleet-wait.py already does, so the entry point works however it is
+# launched.
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+
+from fleet import Fleet  # noqa: E402
 
 API_ERRORS = (OSError, json.JSONDecodeError, KeyError)
 # Sengaja tetap sempit di sini, dan itu berbeda dari orchestrator/waiter.

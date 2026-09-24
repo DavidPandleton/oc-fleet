@@ -211,7 +211,8 @@ class Orchestrator:
     def __init__(self, fleet=None, max_parallel=4, poll_interval=POLL_INTERVAL,
                  concurrency_limit=PROVIDER_CONCURRENCY,
                  rate_per_minute=PROVIDER_RATE_PER_MINUTE,
-                 burst=PROVIDER_BURST, store=None, run_id=None):
+                 burst=PROVIDER_BURST, store=None, run_id=None,
+                 event_sink=None):
         if fleet is None:
             fleet = Fleet()
         if int(max_parallel) < 1:
@@ -224,6 +225,7 @@ class Orchestrator:
         self._fleet = fleet
         self._store = store
         self._run_id = run_id
+        self._event_sink = event_sink
 
         # Pasang pembatas pada klien kalau belum ada. Tanpa ini, oc-fleet
         # membanjiri server dengan pollingnya sendiri dan mendapat 429 -
@@ -392,15 +394,18 @@ class Orchestrator:
             self._store.upsert_task(self._run_id, tid, record)
 
     def _persist_event(self, task_id, event_type, status, record):
-        if self._store is None or self._run_id is None:
-            return
-        self._store.append_event(self._run_id, {
+        event = {
             "event_type": event_type,
             "task_id": task_id,
             "status": status,
             "session_id": record.get("session_id"),
             "attempt": record.get("attempts"),
-        })
+        }
+        if self._event_sink is not None:
+            self._event_sink.emit({"run_id": self._run_id, **event})
+        if self._store is None or self._run_id is None:
+            return
+        self._store.append_event(self._run_id, event)
         self._store.upsert_task(self._run_id, task_id, record)
         if record.get("artifacts") is not None:
             self._store.upsert_artifact(

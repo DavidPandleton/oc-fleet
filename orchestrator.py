@@ -190,6 +190,8 @@ def model_for_attempt(task, attempt):
 def _new_record():
     return {
         "status": "pending",
+        "agent_status": None,
+        "verification_status": None,
         "session_id": None,
         "outcome": None,
         "attempts": 0,
@@ -700,17 +702,41 @@ class Orchestrator:
         rec["finished_at"] = time.monotonic()
         if rec["started_at"] is not None:
             rec["duration"] = round(rec["finished_at"] - rec["started_at"], 3)
-        if outcome is not None and outcome not in FAILED_OUTCOMES:
+
+        # Verification is about the ARTIFACT, not about the agent. The coffee
+        # run showed why this distinction matters: the QA agent timed out, so
+        # verification was skipped entirely, even though a build+test pass was
+        # possible the whole time. Run verification whenever the agent had a
+        # chance to write to the workdir - success, failure, or timeout alike.
+        agent_failed = outcome is None or outcome in FAILED_OUTCOMES
+        rec["agent_status"] = (
+            "timed_out" if (timed_out and outcome is None)
+            else ("failed" if agent_failed else "succeeded")
+        )
+        verification = None
+        if task.verify:
             verification = run_verification(
                 task.verify,
                 task.workdir,
                 timeout=task.verify_timeout,
             )
             rec["verification"] = verification.to_dict()
+            rec["verification_status"] = (
+                "passed" if verification.passed else "failed"
+            )
+        else:
+            rec["verification_status"] = "not_required"
+
+        # The artifact manifest describes what the agent left in the workdir.
+        # It is collected regardless of verification: an agent that wrote real
+        # files and then failed still produced evidence worth handing off.
+        if not agent_failed or task.verify:
             from artifacts import collect_manifest
 
             rec["artifacts"] = collect_manifest(task.workdir).to_dict()
-            if verification.required and not verification.passed:
+
+        if not agent_failed and outcome is not None:
+            if verification is not None and verification.required and not verification.passed:
                 rec["failure_class"] = classify_failure(verification_failed=True)
                 rec["status"] = "verification_failed"
                 if rec["attempts"] <= task.retries:
@@ -722,7 +748,7 @@ class Orchestrator:
                     self._persist_event(tid, "task_finished", rec["status"], rec)
                     print("verification failed: %s" % tid)
                 return
-            rec["status"] = "verification_passed" if verification.required else "succeeded"
+            rec["status"] = "verification_passed" if verification is not None and verification.required else "succeeded"
             teardown_error = self._run_hooks(
                 task.teardown, task.workdir, task.env, phase="teardown"
             )

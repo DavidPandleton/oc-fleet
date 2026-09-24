@@ -90,6 +90,34 @@ The orchestrator executes a topological DAG, runs independent branches in
 parallel, retries tasks individually, and skips dependents of failed tasks
 without stopping unrelated branches.
 
+### Planning before execution
+
+``plan()`` validates the DAG and returns the full execution map without
+dispatching anything: topological order, parallel waves, each task's model,
+fallbacks, retries, timeout, hooks, verification, isolation, and operator
+risks (missing verification, retry with the same model, shared workdir).
+``run()`` builds this plan before it persists the run or dispatches the first
+agent, so an invalid dependency, cycle, or empty workdir fails fast.
+``run(dry_run=True)`` prints the same map.
+
+### Verification is about the artifact, not the agent
+
+Verification commands run whenever the agent had a chance to write to the
+workdir - success, failure, or timeout alike. A timeout says something about
+the agent, not about the files it left behind, and the coffee-catalog run
+showed the cost of conflating the two: a QA agent timed out, verification was
+skipped, and a passing build was nearly discarded as a failure.
+
+Each task result therefore separates the two facts:
+
+| Field | Values |
+|---|---|
+| `agent_status` | `succeeded`, `failed`, `timed_out` |
+| `verification_status` | `passed`, `failed`, `not_required` |
+
+and still collects the artifact manifest when the agent fails, so a failed
+run reports what it produced.
+
 Retries can use automatic model fallbacks. Attempt 1 uses `model`; subsequent
 attempts use entries from `fallbacks` in order. This is useful when the error
 comes from a provider, such as `provider.invalid-request` with empty content,

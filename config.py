@@ -21,6 +21,11 @@ DEFAULTS = {
     },
     "max_parallel": 3,
     "worktree_root": "/tmp/oc-fleet-worktrees",
+    # Tabel harga per model dalam dolar per 1 juta token. Kosong secara
+    # default: biaya yang tidak diketahui harus tetap None, bukan 0.
+    # Isi contoh:
+    #   "prices": {"cutad/deepseek-v4-flash": {"input": 0.25, "output": 1.0}}
+    "prices": {},
 }
 
 

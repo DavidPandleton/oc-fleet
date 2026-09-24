@@ -27,6 +27,13 @@ consumer used to read may be renamed. Those are called out under `Changed`.
   plan is still reviewable on a machine without the workdirs.
 - Three "task is too big for one session" lint rules, all warnings:
   `BIG-TASK-MANY-STEPS`, `BIG-TASK-MANY-ARTEFACTS`, `BIG-TASK-NO-CHECKPOINT`.
+- Per-task usage and cost. `normalize_stats` and `estimate_cost` existed
+  but nothing called them, so a finished task carried no token data. The
+  record now has `stats`, `model_used`, and `estimated_cost` (the last
+  only when a price table is configured, otherwise `None`).
+- `CHANGELOG.md` and `MIGRATIONS.md`.
+- `benchmarks/`, a reproducible in-process benchmark with a fixture repo
+  and raw JSON results.
 
 ### Changed
 

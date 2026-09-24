@@ -16,3 +16,12 @@ oc-fleet-mcp = "mcp_server:main"
 
 [tool.setuptools]
 py-modules = ["fleet", "endpoint", "ratelimit", "orchestrator", "prompt_lint", "config", "worktree", "contracts", "artifacts", "failures", "store", "events", "pricing", "accounting", "review", "mcp_server", "cli"]
+
+[tool.pytest.ini_options]
+# Only the top-level suite. benchmarks/fixture_repo is a separate little
+# project with its own tests and its own src layout; collecting it here
+# fails on its `from kata import ...` and, worse, would count a fixture's
+# tests as oc-fleet's.
+testpaths = ["."]
+norecursedirs = ["benchmarks", ".git", "build", "dist", "*.egg-info"]
+python_files = ["test_*.py"]

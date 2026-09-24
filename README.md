@@ -189,6 +189,26 @@ Each task result therefore separates the two facts:
 and still collects the artifact manifest when the agent fails, so a failed
 run reports what it produced.
 
+### Per-task usage and cost
+
+A finished task carries the token counters the server reported, normalized
+onto the record under `stats`, plus the model actually used under
+`model_used`. Cost is computed only when a price table was supplied to the
+orchestrator, through the `prices` argument or the `prices` key in
+`config.json`:
+
+```python
+from orchestrator import Orchestrator
+
+prices = {"cutad/deepseek-v4-flash": {"input": 0.25, "output": 1.0}}
+orch = Orchestrator(prices=prices)
+```
+
+The prices are dollars per million tokens. An unknown model, or a call
+with no price table at all, leaves `estimated_cost` as `None` rather than
+`0.0`. That distinction is deliberate: a task that was never priced must
+not look like a task that cost nothing.
+
 Retries can use automatic model fallbacks. Attempt 1 uses `model`; subsequent
 attempts use entries from `fallbacks` in order. This is useful when the error
 comes from a provider, such as `provider.invalid-request` with empty content,

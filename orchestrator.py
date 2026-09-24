@@ -314,7 +314,7 @@ class Orchestrator:
                  rate_per_minute=PROVIDER_RATE_PER_MINUTE,
                  burst=PROVIDER_BURST, store=None, run_id=None,
                  event_sink=None, heartbeat_interval=HEARTBEAT_INTERVAL,
-                 tool_timeout=None):
+                 tool_timeout=None, prices=None):
         if fleet is None:
             fleet = Fleet()
         if int(max_parallel) < 1:
@@ -340,6 +340,10 @@ class Orchestrator:
         self._run_id = run_id
         self._event_sink = event_sink
         self._preflight_failed = False
+        # Tabel harga opsional. Tanpa ini, biaya tetap None dan itu
+        # memang jawaban yang benar: model tak dikenal tidak sama dengan
+        # biaya nol. Diteruskan apa adanya ke pricing.estimate_cost.
+        self._prices = prices
 
         # Pasang pembatas pada klien kalau belum ada. Tanpa ini, oc-fleet
         # membanjiri server dengan pollingnya sendiri dan mendapat 429 -
@@ -1039,6 +1043,28 @@ class Orchestrator:
         rec["finished_at"] = time.monotonic()
         if rec["started_at"] is not None:
             rec["duration"] = round(rec["finished_at"] - rec["started_at"], 3)
+
+        # Token and cost attribution. `normalize_stats` and
+        # `estimate_cost` existed and were tested, but nothing called
+        # them, so a finished task carried no usage at all. Read the
+        # counters straight off the status payload, and only compute a
+        # cost when a price table was supplied - an unknown model is
+        # unknown, not free.
+        from accounting import normalize_stats
+        from pricing import estimate_cost
+
+        stats = normalize_stats(state) if isinstance(state, dict) else {}
+        stats.pop("attribution", None)
+        if stats:
+            rec["stats"] = stats
+        model_used = (
+            state.get("model") if isinstance(state, dict) else None
+        ) or task.model
+        rec["model_used"] = model_used
+        rec["estimated_cost"] = estimate_cost(
+            model_used, stats.get("input", 0), stats.get("output", 0),
+            self._prices,
+        ) if stats else None
 
         # Verification is about the ARTIFACT, not about the agent. The coffee
         # run showed why this distinction matters: the QA agent timed out, so

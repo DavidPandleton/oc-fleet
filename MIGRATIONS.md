@@ -32,6 +32,18 @@ regardless of task outcomes. Run-level success is not implied by
 Do not treat `completed` as success. Do not treat `succeeded` as
 verification passed: that is `verification_passed`.
 
+A task record also carries usage fields. These are additive, so an older
+consumer that ignores them keeps working:
+
+| Field | Meaning |
+|---|---|
+| `stats` | Token counters normalized from the server payload, when reported. Absent if the server reported none. |
+| `model_used` | The model actually used for the final attempt. |
+| `estimated_cost` | Estimated cost for the reported usage, or `None` when no price table was configured or the model is unknown. |
+
+`estimated_cost` is `None`, never `0.0`, when it cannot be computed. An
+unpriced task is unknown, not free.
+
 ## Exit-code contract
 
 `run_status()` returns a process exit code and is stable:

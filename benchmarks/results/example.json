@@ -1,0 +1,107 @@
+{
+  "fixture": "benchmarks/fixture_repo",
+  "generated_at": "20260924T165542Z",
+  "platform": "linux",
+  "python": "3.11.15",
+  "scenarios": {
+    "provider_failure_recovery": {
+      "duration_seconds": 0.0029,
+      "measurements": {
+        "attempts_recorded": 2,
+        "final_status": "succeeded",
+        "recovered": true,
+        "retries_configured": 1,
+        "run_status_code": 0
+      },
+      "ok": true,
+      "problems": []
+    },
+    "resume_behavior": {
+      "duration_seconds": 0.0099,
+      "measurements": {
+        "first_pass_dispatches": 2,
+        "resume_re_dispatched_nothing": true,
+        "second_pass_dispatches": 0,
+        "second_pass_statuses": {
+          "a": "succeeded",
+          "b": "succeeded"
+        }
+      },
+      "ok": true,
+      "problems": []
+    },
+    "serial_vs_parallel": {
+      "duration_seconds": 0.3224,
+      "measurements": {
+        "parallel": {
+          "dispatches": 6,
+          "max_parallel": 6,
+          "peak_in_flight": 6,
+          "wall_seconds": 0.0553
+        },
+        "poll_interval": 0.02,
+        "polls_to_finish": 3,
+        "serial": {
+          "dispatches": 6,
+          "max_parallel": 1,
+          "peak_in_flight": 1,
+          "wall_seconds": 0.2665
+        },
+        "speedup_x": 4.82,
+        "task_count": 6
+      },
+      "ok": true,
+      "problems": []
+    },
+    "token_cost_attribution": {
+      "duration_seconds": 0.0043,
+      "measurements": {
+        "cost_matches_pricing": true,
+        "expected_cost": 0.0007,
+        "input_tokens": 1200,
+        "model": "cutad/deepseek-v4-flash",
+        "output_tokens": 400,
+        "recorded_cost": 0.0007,
+        "recorded_stats": {
+          "input": 1200,
+          "output": 400
+        },
+        "unpriced_cost_is_none": true
+      },
+      "ok": true,
+      "problems": []
+    },
+    "verification_failure_recovery": {
+      "duration_seconds": 0.0368,
+      "measurements": {
+        "agent_outcome": "completed",
+        "correctly_not_succeeded": true,
+        "final_status": "verification_failed",
+        "first_verify_returncode": 1,
+        "run_status_code": 2,
+        "verification_passed_flag": false
+      },
+      "ok": true,
+      "problems": []
+    },
+    "worktree_setup_cost": {
+      "duration_seconds": 0.0968,
+      "measurements": {
+        "added_seconds_for_isolation": 0.0267,
+        "task_count": 3,
+        "with_isolation": {
+          "dispatches": 3,
+          "isolated": true,
+          "wall_seconds": 0.0487
+        },
+        "without_isolation": {
+          "dispatches": 3,
+          "isolated": false,
+          "wall_seconds": 0.022
+        }
+      },
+      "ok": true,
+      "problems": []
+    }
+  }
+}

@@ -1,0 +1,7 @@
+[project]
+name = "kata-benchmark-fixture"
+version = "0.0.1"
+
+[tool.pytest.ini_options]
+pythonpath = ["src"]
+testpaths = ["tests"]

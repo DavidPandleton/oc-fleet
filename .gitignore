@@ -4,3 +4,7 @@ __pycache__/
 
 build/
 *.egg-info/
+
+# Benchmark output. One example run is committed as example.json; every
+# other run is a local artifact.
+benchmarks/results/bench-*.json

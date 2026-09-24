@@ -314,7 +314,7 @@ class Orchestrator:
                  rate_per_minute=PROVIDER_RATE_PER_MINUTE,
                  burst=PROVIDER_BURST, store=None, run_id=None,
                  event_sink=None, heartbeat_interval=HEARTBEAT_INTERVAL,
-                 tool_timeout=None, prices=None):
+                 tool_timeout=None, prices=None, worktree_root=None):
         if fleet is None:
             fleet = Fleet()
         if int(max_parallel) < 1:
@@ -342,6 +342,8 @@ class Orchestrator:
         self._preflight_failed = False
         # Task ids adopted from the store on a resumed run; never dispatched.
         self._resumed = set()
+        # Root untuk git worktree isolasi. None = default worktree.py.
+        self.worktree_root = worktree_root
         # Tabel harga opsional. Tanpa ini, biaya tetap None dan itu
         # memang jawaban yang benar: model tak dikenal tidak sama dengan
         # biaya nol. Diteruskan apa adanya ke pricing.estimate_cost.

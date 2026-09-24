@@ -36,6 +36,11 @@ consumer used to read may be renamed. Those are called out under `Changed`.
   and raw JSON results.
 - `run(resume=True)`: a run with a store and a `run_id` adopts tasks a
   previous run already finished instead of dispatching them again.
+- `worktree.create` now raises a clear `ValueError` when a worktree name
+  is already in use, instead of letting git's exit 128 surface as a raw
+  `CalledProcessError` from a nested `worktree add`.
+- `Orchestrator(worktree_root=...)`, so the isolation root is a real
+  parameter rather than an attribute read through `getattr`.
 
 ### Changed
 

@@ -17,11 +17,65 @@ from __future__ import annotations
 
 import time
 from dataclasses import dataclass, field
+from shlex import split as shell_split
 
+from contracts import VerificationResult
 from fleet import Fleet
 from ratelimit import ConcurrencyLimiter, RateLimiter
 
+
+
+def run_verification(commands, workdir, timeout=300.0):
+    """Run independent verification commands and capture bounded evidence.
+
+    Commands are tokenized with ``shlex`` and executed without a shell. This
+    intentionally does not support shell operators unless a future explicit
+    opt-in is added; verification must be auditable, not an invisible agent
+    prompt.
+    """
+    import subprocess
+
+    commands = list(commands or [])
+    result = VerificationResult(required=bool(commands), passed=True)
+    for command in commands:
+        entry = {
+            "command": command,
+            "returncode": None,
+            "stdout": "",
+            "stderr": "",
+            "timed_out": False,
+        }
+        try:
+            argv = shell_split(command)
+            if not argv:
+                raise ValueError("verification command is empty")
+            completed = subprocess.run(
+                argv,
+                cwd=workdir,
+                capture_output=True,
+                text=True,
+                timeout=timeout,
+                check=False,
+            )
+            entry["returncode"] = completed.returncode
+            entry["stdout"] = completed.stdout[-8000:]
+            entry["stderr"] = completed.stderr[-8000:]
+        except subprocess.TimeoutExpired as exc:
+            entry["timed_out"] = True
+            entry["stdout"] = (exc.stdout or "")[-8000:]
+            entry["stderr"] = (exc.stderr or "")[-8000:]
+        except (OSError, ValueError) as exc:
+            entry["error"] = str(exc)[:2000]
+        result.commands.append(entry)
+        if entry.get("timed_out") or entry.get("returncode") != 0:
+            result.passed = False
+            break
+    return result
+
+
 FAILED_OUTCOMES = {"failed", "crashed", "error", "cancelled", "canceled"}
+
+
 # Both call sites around a running session catch everything, for the same
 # reason. The cost of a wrong guess is asymmetric: a crashed run strands
 # live sessions in "running" that nothing will ever poll again, whereas a
@@ -102,6 +156,9 @@ class Task:
     # jalan di qwen3-8-flash-next. Retry buta dengan model yang sama
     # membuang waktu bila errornya berasal dari provider, bukan prompt.
     fallbacks: list[str] = field(default_factory=list)
+    # Independent verification commands run after the agent succeeds.
+    verify: list[str] = field(default_factory=list)
+    verify_timeout: float = 300.0
     # Bila True, orchestrator membuat git worktree baru dari `repo`
     # sebelum dispatch pertama dan memakai path itu sebagai workdir,
     # supaya agent paralel tidak menulis ke direktori yang sama.
@@ -131,6 +188,11 @@ def _new_record():
         "started_at": None,
         "finished_at": None,
         "duration": None,
+        "verification": {
+            "required": False,
+            "passed": None,
+            "commands": [],
+        },
     }
 
 
@@ -324,7 +386,11 @@ class Orchestrator:
             blocked_by = [
                 dep
                 for dep in self._tasks[tid].depends_on
-                if self._results[dep]["status"] in ("failed", "skipped")
+                if self._results[dep]["status"] in (
+                    "failed",
+                    "verification_failed",
+                    "skipped",
+                )
             ]
             if not blocked_by:
                 continue
@@ -338,9 +404,13 @@ class Orchestrator:
 
     def _ready(self, tid):
         return all(
-            self._results[dep]["status"] == "succeeded"
+            self._is_success(self._results[dep])
             for dep in self._tasks[tid].depends_on
         )
+
+    @staticmethod
+    def _is_success(record):
+        return record.get("status") in ("succeeded", "verification_passed")
 
     def _dispatch_ready(self, pending, running):
         for tid in list(pending):
@@ -458,7 +528,17 @@ class Orchestrator:
         if rec["started_at"] is not None:
             rec["duration"] = round(rec["finished_at"] - rec["started_at"], 3)
         if outcome is not None and outcome not in FAILED_OUTCOMES:
-            rec["status"] = "succeeded"
+            verification = run_verification(
+                task.verify,
+                task.workdir,
+                timeout=task.verify_timeout,
+            )
+            rec["verification"] = verification.to_dict()
+            if verification.required and not verification.passed:
+                rec["status"] = "verification_failed"
+                print("verification failed: %s" % tid)
+                return
+            rec["status"] = "verification_passed" if verification.required else "succeeded"
             print(
                 "finished: %s (outcome %s, %s)"
                 % (tid, outcome, self._fmt_duration(rec["duration"]))

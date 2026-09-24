@@ -94,6 +94,26 @@ class Task:
     depends_on: list[str] = field(default_factory=list)
     retries: int = 0
     timeout: float = 1800
+    # Model pengganti dipakai saat retry. Attempt 1 selalu memakai
+    # `model`; attempt N>1 memakai `fallbacks[N-2]` bila ada, kalau
+    # tidak memakai `model` lagi. Motivasi dari demo mandor 2026-09-24:
+    # prompt yang sama gagal 2x di deepseek-v4-flash
+    # (provider.invalid-request, content kosong) lalu sukses sekali
+    # jalan di qwen3-8-flash-next. Retry buta dengan model yang sama
+    # membuang waktu bila errornya berasal dari provider, bukan prompt.
+    fallbacks: list[str] = field(default_factory=list)
+
+
+def model_for_attempt(task, attempt):
+    """Model yang dipakai attempt ke-`attempt` (1-based).
+
+    Attempt 1 selalu model utama. Attempt berikutnya memakai
+    fallbacks berurutan; bila fallbacks habis, kembali ke model utama.
+    """
+    if attempt > 1 and task.fallbacks:
+        idx = min(attempt - 2, len(task.fallbacks) - 1)
+        return task.fallbacks[idx]
+    return task.model
 
 
 def _new_record():
@@ -332,7 +352,8 @@ class Orchestrator:
                 rec["started_at"] = time.monotonic()
             try:
                 session_id = self.fleet.dispatch(
-                    task.prompt, task.workdir, title=task.title or tid, model=task.model
+                    task.prompt, task.workdir, title=task.title or tid,
+                    model=model_for_attempt(task, rec["attempts"]),
                 )
             except DISPATCH_ERRORS as exc:
                 session_id = None

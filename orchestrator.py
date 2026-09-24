@@ -258,6 +258,44 @@ def check_boundary(paths, owns):
     }
 
 
+def patterns_overlap(first, second):
+    """Apakah dua pola glob `owns` bisa menyentuh file yang sama?
+
+    Perbandingan glob secara umum tidak bisa diputuskan dengan tepat,
+    jadi fungsi ini sengaja konservatif: lebih baik menolak dua pola
+    yang sebenarnya disjoint daripada meloloskan tabrakan nyata.
+
+    Aturannya, setelah normalisasi ke bentuk kanonik:
+
+    - pola yang sama persis selalu tumpang-tindih;
+    - satu pola yang merupakan prefiks direktori pola lain (setelah
+      melepas "**" dan "/*") tumpang-tindih, mis. "src/**" vs "src/db.py";
+    - selebihnya dianggap disjoint.
+    """
+
+    def canonical(pattern):
+        cleaned = pattern.replace(os.sep, "/").strip()
+        while cleaned.startswith("./"):
+            cleaned = cleaned[2:]
+        cleaned = cleaned.rstrip("/")
+        for suffix in ("/**", "/*", "**", "*"):
+            if cleaned.endswith(suffix):
+                cleaned = cleaned[: -len(suffix)]
+                break
+        return cleaned.rstrip("/")
+
+    if first == second:
+        return True
+    a, b = canonical(first), canonical(second)
+    if not a or not b:
+        # Pola kosong (setelah normalisasi) berarti "semuanya", sehingga
+        # bertabrakan dengan apa pun.
+        return True
+    if a == b:
+        return True
+    return a.startswith(b + "/") or b.startswith(a + "/")
+
+
 class Orchestrator:
     """Run a DAG of Tasks over a Fleet, with retries and parallel branches.
 
@@ -351,6 +389,34 @@ class Orchestrator:
         cycle = self._find_cycle()
         if cycle:
             raise ValueError("dependency cycle detected: %s" % " -> ".join(cycle))
+        self._reject_ownership_overlap()
+
+    def _reject_ownership_overlap(self):
+        """Tolak dua task di workdir sama yang wilayah tulisnya bertabrakan.
+
+        Boundary hanya melindungi kalau lane-nya benar-benar terpisah.
+        `src/**` dan `src/db.py` sama-sama mengklaim `src/db.py`, jadi
+        tak ada satu agent pun yang bisa dituduh bersalah dengan adil.
+        Kesalahan seperti ini jauh lebih murah ditangkap di sini,
+        sebelum ada sesi yang jalan, daripada setelah file bertabrakan.
+        """
+        for i, first_id in enumerate(self._task_order):
+            first = self._tasks[first_id]
+            if not first.owns:
+                continue
+            for second_id in self._task_order[i + 1:]:
+                second = self._tasks[second_id]
+                if not second.owns or second.workdir != first.workdir:
+                    continue
+                for first_pattern in first.owns:
+                    for second_pattern in second.owns:
+                        if patterns_overlap(first_pattern, second_pattern):
+                            raise ValueError(
+                                "ownership overlap: tasks %r and %r both claim "
+                                "matching paths (%r vs %r) in workdir %r"
+                                % (first_id, second_id, first_pattern,
+                                   second_pattern, first.workdir)
+                            )
 
     def _find_cycle(self):
         """Iterative DFS over dependency edges; return the cycle path or None."""

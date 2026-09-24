@@ -164,6 +164,13 @@ are never attributed to the next. `owns` and `isolate=True` together are the
 safe combination: a private worktree per lane, and a mechanical check that
 each lane stayed inside its own fences.
 
+Overlapping lanes are refused at preflight. If two tasks in the same workdir
+declare patterns that can match the same file - `src/**` against `src/db.py`,
+or two identical patterns - `validate()` and `plan()` raise before anything is
+dispatched, naming both tasks and the clashing patterns. A boundary that two
+agents both claim is not a boundary; catching it up front is cheaper than
+untangling a collision mid-run.
+
 ## Configuration: models by role
 
 `~/.config/oc-fleet/config.json` is used for role-specific models and runtime

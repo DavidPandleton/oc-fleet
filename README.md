@@ -1,28 +1,28 @@
 # oc-fleet
 
-Fleet manager untuk OpenCode agents via HTTP API. Bikin, monitor, dan
-kelola puluhan session paralel dari satu CLI atau DAG orchestrator.
+A fleet manager for OpenCode agents over the HTTP API. Create, monitor, and
+manage dozens of parallel sessions from one CLI or DAG orchestrator.
 
-## Install (5 menit)
+## Install in 5 minutes
 
-Prasyarat: `opencode serve --service` jalan.
+Prerequisite: `opencode serve --service` must be running.
 
 ```bash
-pipx install ~/oss/oc-fleet        # dari lokal
-# atau: pipx install git+https://github.com/DavidPandleton/oc-fleet.git
-oc-fleet stats                      # cek server hidup
+pipx install ~/oss/oc-fleet        # from a local checkout
+# or: pipx install git+https://github.com/DavidPandleton/oc-fleet.git
+oc-fleet stats                     # verify that the server is reachable
 ```
 
 ## Quick start
 
 ```bash
-python3 cli.py stats                    # aggregate stats server
-python3 cli.py sessions 5               # 5 session terakhir
-python3 cli.py dispatch "TASK" --workdir /path/to/repo
-python3 cli.py show ses_xxx             # outcome + reply
-python3 cli.py watch                    # live completions
-python3 web/dashboard.py                # web dashboard di :8787
-python3 prompt_lint.py "TASK"           # cek prompt sebelum dispatch
+oc-fleet stats                     # aggregate server statistics
+oc-fleet sessions 5                # five most recent sessions
+oc-fleet dispatch "TASK" --workdir /path/to/repo
+oc-fleet show ses_xxx              # outcome and reply
+oc-fleet watch                     # live completions
+python3 web/dashboard.py           # web dashboard on :8787
+python3 prompt_lint.py "TASK"     # lint a prompt before dispatch
 ```
 
 ## Web dashboard
@@ -31,12 +31,13 @@ python3 prompt_lint.py "TASK"           # cek prompt sebelum dispatch
 python3 web/dashboard.py --port 8787
 ```
 
-Stdlib only, no npm, no flask. Buka `http://127.0.0.1:8787`:
+The dashboard uses only the Python standard library. No npm or Flask is
+required. Open `http://127.0.0.1:8787` to see:
 
-- stats header (sessions, tool calls, success rate)
-- tabel session terbaru, refresh tiap 5 detik
-- live completions via SSE stream
-- form dispatch langsung dari browser
+- summary statistics for sessions, tool calls, and success rate
+- a recent-session table that refreshes every five seconds
+- live completions through an SSE stream
+- a browser form for dispatching tasks directly
 
 ## Prompt linter
 
@@ -45,33 +46,32 @@ python3 prompt_lint.py "Think step by step. Improve everything."
 python3 prompt_lint.py --file task.txt
 ```
 
-Ngecek prompt terhadap perilaku harness yang udah diukur lewat 16 probe
-terkontrol. Yang dilaporin: fluff yang nggak ngefek (chain-of-thought,
-urgency, role), scope tak terbatas, output yang nggak bisa diverifikasi,
-em-dash, dan destructive verb tanpa preservation constraint.
+The linter checks prompts against harness behavior measured through 16
+controlled probes. It reports ineffective fluff such as chain-of-thought,
+urgency, and role instructions; unlimited scope; unverifiable output;
+em-dashes; and destructive verbs without preservation constraints.
 
-Aturan fluff, `VAGUE-OUTPUT`, dan `DESTRUCTIVE-NO-GUARD` sadar negasi:
-prompt yang **melarang** sesuatu nggak dilapor seolah-olah **meminta** hal
-itu. `"Do not use chain of thought"` bukan `"Think step by step"`, dan
-`"Do not delete anything"` bukan `"Delete everything"`. Negasi dibaca
-per-kalimat, dengan konjungsi ber-koma sebagai batas klausa, jadi
-`"Do not retry, and think step by step"` tetap benar dilaporkan.
+The fluff, `VAGUE-OUTPUT`, and `DESTRUCTIVE-NO-GUARD` rules understand
+negation. A prompt that forbids something is not reported as if it requested
+that thing. For example, `"Do not use chain of thought"` is not the same as
+`"Think step by step"`, and `"Do not delete anything"` is not the same as
+`"Delete everything"`. Negation is parsed per sentence, with comma-separated
+clauses treated as boundaries, so `"Do not retry, and think step by step"`
+still reports the second clause.
 
-Sejak eksperimen delegasi (2026-09-21) ada empat aturan tambahan yang nyasar
-celah spec, karena itu mode kegagalan agent yang sebenarnya: dia ngisi celah
-dengan aturan karangan sendiri yang kedengeran masuk akal.
+Four additional rules cover specification gaps that can cause agents to
+invent plausible but incorrect behavior:
 
-| Rule | Yang ditangkep |
+| Rule | Detects |
 |---|---|
-| `SPEC-UNDEFINED-EDGE` | enumerasi terbuka (`etc`, `and so on`) yang ngundang case karangan |
-| `SPEC-TEST-ONLY-VALID` | "verify the examples above" cuma ngecek happy path |
-| `SPEC-NO-INVALID-CONTRACT` | prompt implementasi tanpa nyebut kelakuan input invalid |
-| `SPEC-VERIFY-SELF-REFERENTIAL` | verifikasi mandiri, bukan bukti independen |
+| `SPEC-UNDEFINED-EDGE` | Open-ended enumerations such as `etc` and `and so on` |
+| `SPEC-TEST-ONLY-VALID` | Prompts that verify only the happy-path examples |
+| `SPEC-NO-INVALID-CONTRACT` | Implementation prompts that omit invalid-input behavior |
+| `SPEC-VERIFY-SELF-REFERENTIAL` | Self-referential verification instead of independent evidence |
 
-Contoh nyata kenapa ini penting: T1 minta parser durasi, nyebut bentuk validnya,
-tapi nggak bilang `"1h1h"` harus apa. Agent ngarang aturan "unit harus urut
-menurun", nolak input legal, dan verifikasinya SENDIRI lulus karena dia nulis
-tesnya dari asumsinya sendiri. Detail: `~/kb/projects/LAPORAN_FINAL.md`.
+For example, an agent asked to parse durations may be given valid forms but
+not told what `"1h1h"` means. It can invent a rule that units must be in
+descending order, reject legal input, and then mark its own tests as passing.
 
 ## Orchestrator
 
@@ -86,25 +86,27 @@ o.run()
 print(o.summary())
 ```
 
-DAG topologis, branch independen jalan paralel, retry per task, dependent
-dari task gagal di-skip tanpa bunuh branch lain.
+The orchestrator executes a topological DAG, runs independent branches in
+parallel, retries tasks individually, and skips dependents of failed tasks
+without stopping unrelated branches.
 
-Retry memakai model fallback otomatis: attempt 1 pakai `model`, attempt
-berikutnya pakai `fallbacks` berurutan. Berguna saat error berasal dari
-provider (misal `provider.invalid-request` dengan content kosong), bukan
-dari prompt - retry model sama hanya membuang waktu.
+Retries can use automatic model fallbacks. Attempt 1 uses `model`; subsequent
+attempts use entries from `fallbacks` in order. This is useful when the error
+comes from a provider, such as `provider.invalid-request` with empty content,
+rather than from the prompt. Retrying the same model would only waste time.
 
-Task paralel di repo yang sama bisa diisolasi via git worktree:
+Tasks running in parallel on the same repository can be isolated with Git
+worktrees:
 
 ```python
 o.add(Task(id="a", prompt="...", workdir="/repo", repo="/repo",
-           isolate=True))  # workdir diarahkan ke worktree baru otomatis
+           isolate=True))  # automatically creates an isolated worktree
 ```
 
-## Config: model per peran
+## Configuration: models by role
 
-`~/.config/oc-fleet/config.json` (dibuat otomatis dari default bila tidak
-ada). Contoh:
+`~/.config/oc-fleet/config.json` is used for role-specific models and runtime
+settings. A partial configuration is merged with the defaults.
 
 ```json
 {
@@ -126,42 +128,50 @@ ada). Contoh:
 
 ```python
 from fleet import Fleet
-f = Fleet()
-sid = f.dispatch("Fix the bug", "/repo", title="fix", model="cutad/qwen3-8-flash-next")
-st = f.status(sid)  # {outcome, last_assistant_text}
+
+fleet = Fleet()
+session_id = fleet.dispatch(
+    "Fix the bug",
+    "/repo",
+    title="fix",
+    model="cutad/qwen3-8-flash-next",
+)
+status = fleet.status(session_id)  # {outcome, last_assistant_text}
 ```
 
 ## Architecture
 
-- `fleet.py`: core lib
-- `cli.py`: argparse CLI
-- `orchestrator.py`: DAG runner dengan retry dan parallel branch
-- `prompt_lint.py`: linter prompt berbasis pengukuran
-- `web/dashboard.py`: dashboard stdlib, single file
-- `oc-fleet-wait.py`: detached waiter per session (209 tests total)
+- `fleet.py`: core HTTP client
+- `endpoint.py`: endpoint and password discovery
+- `cli.py`: argparse-based CLI
+- `orchestrator.py`: DAG runner with retries and parallel branches
+- `prompt_lint.py`: linter based on measured harness behavior
+- `config.py`: role-based model and runtime configuration
+- `worktree.py`: Git worktree isolation helpers
+- `web/dashboard.py`: single-file standard-library dashboard
+- `oc-fleet-wait.py`: detached waiter for individual sessions
 
-Requires `opencode serve` running. Password dicari berurutan: env
-`OPENCODE_SERVER_PASSWORD`, `/tmp/oc_serve.log`,
-`~/.local/share/opencode/serve.log`, lalu `~/.config/opencode/service.json`.
-
-- Rouge
+The only runtime prerequisite is a running `opencode serve` instance. The
+password is discovered in this order: `OPENCODE_SERVER_PASSWORD`,
+`/tmp/oc_serve.log`, `~/.local/share/opencode/serve.log`, and finally
+`~/.config/opencode/service.json`.
 
 ## Performance notes
 
-Built and debugged entirely through OpenCode's HTTP API (130 sessions,
-596 tool calls, 97.3% success rate). The tool itself exists because
-driving N agents in parallel from a shell gets unmanageable fast.
+oc-fleet was built and debugged entirely through OpenCode's HTTP API. It
+exists because driving multiple agents in parallel from a shell becomes
+unmanageable quickly.
 
-Key API quirks encoded in `fleet.py` (all discovered by probing the live
-server, not from docs):
+The implementation accounts for several API quirks discovered by probing a
+live server rather than relying only on documentation:
 
-- Response envelopes are inconsistent: `/api/session` returns
-  `{"data": [...]}` but `/api/project` returns a bare list. Both shapes
-  are handled.
-- `Content-Type: application/json` is mandatory or every POST returns 415.
-- Auth is HTTP Basic (`opencode:<password>`), not Bearer.
-- Completion is signalled by the SSE event `session.execution.succeeded`,
-  not by an `idle` message.
+- Response envelopes are inconsistent. `/api/session` returns a `data`
+  envelope while some endpoints return a bare list. Both shapes are handled.
+- `Content-Type: application/json` is mandatory for POST requests.
+- Authentication uses HTTP Basic auth in the form `opencode:<password>`, not
+  Bearer auth.
+- Completion is signaled by the `session.execution.succeeded` SSE event, not
+  by an `idle` message.
 
 ## License
 

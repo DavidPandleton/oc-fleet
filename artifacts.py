@@ -17,7 +17,10 @@ def _git(repo, *args):
 
 def collect_manifest(workdir):
     """Return changed-file evidence without reading file contents."""
-    code, status, error = _git(workdir, "status", "--short")
+    # `--untracked-files=all` matters for boundary checks: plain `git status
+    # --short` collapses a new directory to `frontend/`, which hides the actual
+    # files an agent created and makes ownership impossible to verify.
+    code, status, error = _git(workdir, "status", "--short", "--untracked-files=all")
     if code:
         return ArtifactManifest(
             workdir=workdir,

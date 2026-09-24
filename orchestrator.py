@@ -173,6 +173,16 @@ class Task:
     # supaya agent paralel tidak menulis ke direktori yang sama.
     isolate: bool = False
     repo: str = ""
+    # Wilayah tulis yang boleh disentuh agent, sebagai pola glob relatif
+    # terhadap workdir, misalnya ["backend/**"]. Kosong berarti tidak ada
+    # batasan (perilaku lama). Diperiksa setelah agent selesai: file yang
+    # berubah di luar daftar ini dianggap pelanggaran boundary.
+    #
+    # Ini yang membuat kerja paralel benar-benar harmonis. Prompt bisa
+    # meminta agent untuk "hanya sentuh backend", tapi tidak ada yang
+    # menjaminnya; `owns` mengubah permintaan itu menjadi pemeriksaan
+    # yang dilakukan fleet pada file yang benar-benar berubah.
+    owns: list[str] = field(default_factory=list)
 
 
 def model_for_attempt(task, attempt):
@@ -205,8 +215,46 @@ def _new_record():
             "commands": [],
         },
         "artifacts": None,
+        "boundary": None,
         "failure_class": None,
         "attempts_detail": [],
+    }
+
+
+def check_boundary(paths, owns):
+    """Periksa apakah `paths` semuanya berada di dalam pola `owns`.
+
+    `owns` kosong berarti tidak ada batasan. Pola dibandingkan memakai
+    fnmatch terhadap path relatif yang dinormalisasi ke depan. Pola
+    seperti "backend/**" juga dicocokkan sebagai prefiks direktori,
+    karena fnmatch tidak memahami "**" secara khusus.
+
+    Mengembalikan dict {"owns", "violations", "verdict"}; verdict bernilai
+    None bila tidak ada pelanggaran.
+    """
+    from fnmatch import fnmatch
+
+    if not owns:
+        return {"owns": [], "violations": [], "verdict": None}
+
+    def allowed(path):
+        normalized = path.replace(os.sep, "/").lstrip("./")
+        for pattern in owns:
+            cleaned = pattern.replace(os.sep, "/")
+            if fnmatch(normalized, cleaned):
+                return True
+            # "backend/**" harus mengizinkan "backend/a/b.py"; fnmatch
+            # sendiri tidak menyeberangi "/", jadi bandingkan prefiksnya.
+            prefix = cleaned[:-3] if cleaned.endswith("/**") else cleaned
+            if normalized == prefix or normalized.startswith(prefix.rstrip("/") + "/"):
+                return True
+        return False
+
+    violations = [p for p in paths if not allowed(p)]
+    return {
+        "owns": list(owns),
+        "violations": violations,
+        "verdict": "boundary_violation" if violations else None,
     }
 
 
@@ -387,6 +435,7 @@ class Orchestrator:
                 "teardown": list(task.teardown),
                 "verification": list(task.verify),
                 "isolate": task.isolate,
+                "owns": list(task.owns),
             }
             if not task.verify:
                 risks.append({"task_id": tid, "kind": "no_verification"})
@@ -579,6 +628,13 @@ class Orchestrator:
                 rec["started_at"] = time.monotonic()
             if task.isolate and rec["attempts"] == 1:
                 self._ensure_worktree(task, tid)
+            elif rec["attempts"] == 1:
+                # A shared workdir is a shared baseline. Commit whatever the
+                # previous task left behind, so the next agent starts from a
+                # clean slate and ownership can be attributed to the right
+                # agent. Without this, agent B is blamed for agent A's dirty
+                # files - the exact boundary failure this feature prevents.
+                self._refresh_baseline(task.workdir, tid)
             setup_error = self._run_hooks(task.setup, task.workdir, task.env)
             if setup_error:
                 rec["status"] = "setup_failed"
@@ -730,12 +786,31 @@ class Orchestrator:
         # The artifact manifest describes what the agent left in the workdir.
         # It is collected regardless of verification: an agent that wrote real
         # files and then failed still produced evidence worth handing off.
-        if not agent_failed or task.verify:
+        # It is also required whenever `owns` is set, because boundary
+        # enforcement reads the changed files from it.
+        if not agent_failed or task.verify or task.owns:
             from artifacts import collect_manifest
 
             rec["artifacts"] = collect_manifest(task.workdir).to_dict()
 
+        # Boundary enforcement. A prompt can ask an agent to stay in its lane;
+        # only this check proves it. Violations are recorded against the files
+        # the agent actually changed, so a lane breach is evidence, not a
+        # guess - and it is checked before any merge, not after.
+        if task.owns:
+            changed = (rec.get("artifacts") or {}).get("files_changed", [])
+            rec["boundary"] = check_boundary(changed, task.owns)
+
         if not agent_failed and outcome is not None:
+            if rec["boundary"] and rec["boundary"]["verdict"]:
+                rec["failure_class"] = classify_failure(verification_failed=True)
+                rec["status"] = "verification_failed"
+                self._persist_event(tid, "task_finished", rec["status"], rec)
+                print(
+                    "boundary violation: %s wrote outside %s (%s)"
+                    % (tid, task.owns, ", ".join(rec["boundary"]["violations"]))
+                )
+                return
             if verification is not None and verification.required and not verification.passed:
                 rec["failure_class"] = classify_failure(verification_failed=True)
                 rec["status"] = "verification_failed"
@@ -799,6 +874,33 @@ class Orchestrator:
         root = getattr(self, "worktree_root", None) or "/tmp/oc-fleet-worktrees"
         task.workdir = worktree.create(task.repo or ".", tid, root=root)
         print("worktree: %s -> %s" % (tid, task.workdir))
+
+    def _refresh_baseline(self, workdir, tid):
+        """Commit sisa perubahan sebelum task non-isolasi berikutnya jalan.
+
+        Saat beberapa task berbagi satu workdir, tugas yang berjalan
+        belakangan akan melihat file milik tugas sebelumnya sebagai
+        'berubah' dan dituduh melanggar boundary milik orang lain.
+        Baseline bersih membuat atribusi perubahan kembali ke agent
+        yang benar. Kegagalan di sini tidak fatal: hanya tidak
+        memperbarui baseline.
+        """
+        import subprocess
+
+        commit = [
+            "git", "-C", workdir,
+            "-c", "user.name=oc-fleet", "-c", "user.email=fleet@localhost",
+            "commit", "--allow-empty", "-q", "-m",
+            "oc-fleet baseline before %s" % tid,
+        ]
+        try:
+            subprocess.run(
+                ["git", "-C", workdir, "add", "-A"],
+                capture_output=True, text=True, check=False,
+            )
+            subprocess.run(commit, capture_output=True, text=True, check=False)
+        except OSError:
+            return
 
     def _cancel_session(self, session_id, tid):
         """Best-effort cancel of a session we are about to abandon.

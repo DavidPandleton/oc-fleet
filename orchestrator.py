@@ -193,6 +193,7 @@ def _new_record():
             "passed": None,
             "commands": [],
         },
+        "artifacts": None,
     }
 
 
@@ -534,6 +535,9 @@ class Orchestrator:
                 timeout=task.verify_timeout,
             )
             rec["verification"] = verification.to_dict()
+            from artifacts import collect_manifest
+
+            rec["artifacts"] = collect_manifest(task.workdir).to_dict()
             if verification.required and not verification.passed:
                 rec["status"] = "verification_failed"
                 print("verification failed: %s" % tid)

@@ -164,7 +164,7 @@ class Fleet:
             raise ValueError(f"model is missing a model id: {model!r}")
         return {"providerID": provider, "id": model_id}
 
-    def dispatch(self, task, workdir, title="", model=""):
+    def dispatch(self, task, workdir, title="", model="", env=None):
         """Create a session, post the task prompt, and return its session id.
 
         Both arguments are validated before any HTTP call, because the

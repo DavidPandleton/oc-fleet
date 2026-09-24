@@ -18,6 +18,8 @@ from __future__ import annotations
 import time
 from dataclasses import dataclass, field
 from shlex import split as shell_split
+import os
+import subprocess
 
 from contracts import VerificationResult
 from failures import classify_failure
@@ -162,6 +164,10 @@ class Task:
     verify_timeout: float = 300.0
     # Inject a bounded, typed summary of successful dependencies into prompt.
     handoff: bool = False
+    # Explicit environment and local lifecycle commands.
+    env: dict[str, str] = field(default_factory=dict)
+    setup: list[str] = field(default_factory=list)
+    teardown: list[str] = field(default_factory=list)
     # Bila True, orchestrator membuat git worktree baru dari `repo`
     # sebelum dispatch pertama dan memakai path itu sebagai workdir,
     # supaya agent paralel tidak menulis ke direktori yang sama.
@@ -432,6 +438,7 @@ class Orchestrator:
                 if self._results[dep]["status"] in (
                     "failed",
                     "verification_failed",
+                    "setup_failed",
                     "skipped",
                 )
             ]
@@ -454,6 +461,30 @@ class Orchestrator:
     @staticmethod
     def _is_success(record):
         return record.get("status") in ("succeeded", "verification_passed")
+
+    def _run_hooks(self, commands, workdir, env):
+        merged = os.environ.copy()
+        for key, value in env.items():
+            if not isinstance(key, str) or not isinstance(value, str):
+                return "setup failed: environment keys and values must be strings"
+            merged[key] = value
+        for command in commands:
+            try:
+                argv = shell_split(command)
+                if not argv:
+                    return "setup failed: empty hook command"
+                completed = subprocess.run(
+                    argv, cwd=workdir, env=merged,
+                    capture_output=True, text=True, check=False,
+                )
+            except (OSError, ValueError) as exc:
+                return "setup failed: %s" % str(exc)[:2000]
+            if completed.returncode:
+                return "setup failed (%s): %s" % (
+                    completed.returncode,
+                    (completed.stderr or completed.stdout).strip()[:2000],
+                )
+        return None
 
     def _prompt_for_task(self, task):
         if not task.handoff or not task.depends_on:
@@ -486,6 +517,12 @@ class Orchestrator:
                 rec["started_at"] = time.monotonic()
             if task.isolate and rec["attempts"] == 1:
                 self._ensure_worktree(task, tid)
+            setup_error = self._run_hooks(task.setup, task.workdir, task.env)
+            if setup_error:
+                rec["status"] = "setup_failed"
+                rec["last_text"] = setup_error
+                self._persist_event(tid, "task_finished", rec["status"], rec)
+                continue
             self._persist_event(tid, "task_started", "running", rec)
             try:
                 session_id = self.fleet.dispatch(

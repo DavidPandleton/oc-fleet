@@ -40,6 +40,7 @@ consumer that ignores them keeps working:
 | `stats` | Token counters normalized from the server payload, when reported. Absent if the server reported none. |
 | `model_used` | The model actually used for the final attempt. |
 | `estimated_cost` | Estimated cost for the reported usage, or `None` when no price table was configured or the model is unknown. |
+| `workdir` | The workdir the task ran in, written for every persisted record. `oc_fleet_diff` and review read it. Absent on records written before this field existed. |
 
 `estimated_cost` is `None`, never `0.0`, when it cannot be computed. An
 unpriced task is unknown, not free.
@@ -50,13 +51,18 @@ unpriced task is unknown, not free.
 
 | Code | Meaning |
 |---|---|
-| `0` | Every task met its bar. |
-| `1` | At least one agent failure. |
+| `0` | Every task met its bar. Requires at least one task. |
+| `1` | At least one agent failure, or the run had no tasks at all. |
 | `2` | At least one verification failure. |
 | `3` | Preflight refused the plan; nothing was dispatched. |
 
 `2` outranks `1`: a run with both is reported as a verification failure,
 because that is the one a human must look at.
+
+A run with no tasks exits `1`, not `0`. An empty run produced nothing, and
+a caller must not read "nothing ran" as "everything passed". This applies
+to the stored form read through `oc-fleet-mcp` as well: both paths share
+one implementation of this rule.
 
 ## SQLite store location
 

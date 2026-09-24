@@ -18,25 +18,22 @@ except ImportError:  # pragma: no cover
     FastMCP = None
 
 
-def _exit_code_for(tasks):
-    """Same rule as Orchestrator.run_status(), applied to stored records.
+def _exit_code_for(tasks, preflight_failed=False):
+    """Exit code for stored task records, from the one shared rule.
 
-    Kept in sync with the orchestrator on purpose. A run's exit code is a
-    contract a script acts on, so the stored form must mean the same thing
-    as the live form: 2 (verification failure) outranks 1 (agent failure),
-    and anything unfinished counts against the run rather than for it.
+    Delegates to ``orchestrator.exit_code_for_statuses`` so a stored run
+    and a live run can never disagree. A previous copy of this rule lived
+    here and drifted: it reported an empty run as success.
     """
-    saw_agent_failure = False
+    from orchestrator import exit_code_for_statuses
+
+    if preflight_failed:
+        return 3
+    statuses = []
     for record in tasks.values():
-        if not isinstance(record, dict):
-            continue
-        status = record.get("status")
-        if status == "verification_failed":
-            return 2
-        if status in ("failed", "timed_out", "setup_failed", "skipped",
-                      "pending", "running"):
-            saw_agent_failure = True
-    return 1 if saw_agent_failure else 0
+        if isinstance(record, dict) and record.get("status") is not None:
+            statuses.append(record["status"])
+    return exit_code_for_statuses(statuses)
 
 
 def _task_ids(store, run_id):
@@ -143,13 +140,18 @@ def create_server(store_path):
         return {"session_id": session_id, "workdir": workdir, "model": model}
 
     @server.tool()
-    def oc_fleet_run_dag(tasks: list, workdir: str, base_url: str = "") -> dict:
+    def oc_fleet_run_dag(tasks: list, workdir: str, base_url: str = "",
+                         run_id: str = "", fleet=None) -> dict:
         """Run a small DAG of tasks through the orchestrator.
 
         Each task is a dict with at least `id` and `prompt`; optional keys
         mirror Task fields (`depends_on`, `model`, `verify`, `retries`,
         `owns`, `isolate`, `repo`). An explicit workdir is required so the
         server never runs an agent in its own directory.
+
+        The run is persisted to this server's store, so `oc_fleet_status`,
+        `oc_fleet_run_show`, and `oc_fleet_diff` can read it back. Without
+        a `run_id` one is derived from the task ids.
         """
         if not workdir.strip():
             return {"error": "workdir is required"}
@@ -162,26 +164,36 @@ def create_server(store_path):
             "timeout", "fallbacks", "verify", "verify_timeout", "owns",
             "isolate", "repo", "env", "setup", "teardown", "handoff",
         }
+        for spec in tasks:
+            if not isinstance(spec, dict) or "id" not in spec or "prompt" not in spec:
+                return {"error": "each task needs `id` and `prompt`"}
+            unknown = set(spec) - allowed
+            if unknown:
+                return {"error": "unknown task fields: %s" % sorted(unknown)}
+
+        if not run_id:
+            run_id = "dag-" + "-".join(str(spec["id"]) for spec in tasks)
+        store = RunStore(store_path)
         try:
             limiter = max(1, len(tasks))
-            if base_url.strip():
+            if fleet is None and base_url.strip():
                 from fleet import Fleet
 
-                orch = Orchestrator(fleet=Fleet(base_url=base_url),
-                                    max_parallel=limiter)
-            else:
-                orch = Orchestrator(max_parallel=limiter)
+                fleet = Fleet(base_url=base_url)
+            kwargs = {"max_parallel": limiter, "store": store, "run_id": run_id}
+            if fleet is not None:
+                kwargs["fleet"] = fleet
+            orch = Orchestrator(**kwargs)
             for spec in tasks:
-                if not isinstance(spec, dict) or "id" not in spec or "prompt" not in spec:
-                    return {"error": "each task needs `id` and `prompt`"}
-                unknown = set(spec) - allowed
-                if unknown:
-                    return {"error": "unknown task fields: %s" % sorted(unknown)}
                 fields = dict(spec)
                 fields.setdefault("workdir", workdir)
                 orch.add(Task(**fields))
             orch.run()
-            return {"results": orch.results(), "exit_code": orch.run_status()}
+            return {
+                "run_id": run_id,
+                "results": orch.results(),
+                "exit_code": orch.run_status(),
+            }
         except Exception as exc:
             return {"error": "%s: %s" % (type(exc).__name__, exc)}
 

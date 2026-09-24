@@ -13,16 +13,25 @@ consumer used to read may be renamed. Those are called out under `Changed`.
 
 ### Added
 
-- The MCP surface now matches the plan: `oc_fleet_status`, `oc_fleet_runs`,
-  `oc_fleet_diff`, `oc_fleet_run_dag`, `oc_fleet_approve`, and
-  `oc_fleet_merge` join the original five tools. Read tools are separate
-  from mutation tools; `approve` requires a `verification_passed` task
-  with artifacts, `merge` requires a recorded approval, and `merge` target
-  must be a plain branch name.
-- `RunStore.list_runs()`.
+- `oc_fleet_run_dag` now persists its run (`run_id` is derived from the
+  task ids when not given), so `oc_fleet_status`, `oc_fleet_run_show`, and
+  `oc_fleet_diff` can read it back. It also accepts an injected `fleet`,
+  which is what makes it testable without a live server.
+- `orchestrator.exit_code_for_statuses()`, the single implementation of
+  the exit-code rule, shared by the live orchestrator and the MCP adapter.
 
 ### Fixed
 
+- A run with no tasks reported exit code `0`, so a caller read "nothing
+  ran" as "everything passed". It is `1` now, matching what
+  `run_status()`'s own docstring always said. The MCP adapter carried a
+  second copy of the rule and had the same hole; both now call one
+  function and cannot drift again.
+- A persisted task record did not carry `workdir`, so `oc_fleet_diff` was
+  dead for every real run: it always answered "task has no readable
+  workdir". The field is now written on persist. The existing test passed
+  only because it seeded the row by hand instead of using a run the
+  orchestrator wrote, which is exactly the kind of test that hides a bug.
 - `review.diff()` reported nothing for a file git had not tracked yet,
   which is what an agent creates most of the time. A task that wrote three
   new files showed an empty diff. Untracked paths are now listed, matching
@@ -31,6 +40,14 @@ consumer used to read may be renamed. Those are called out under `Changed`.
 ## [0.2.0] - 2026-09-24
 
 ### Added
+
+- The MCP surface now matches the plan: `oc_fleet_status`, `oc_fleet_runs`,
+  `oc_fleet_diff`, `oc_fleet_run_dag`, `oc_fleet_approve`, and
+  `oc_fleet_merge` join the original five tools. Read tools are separate
+  from mutation tools; `approve` requires a `verification_passed` task
+  with artifacts, `merge` requires a recorded approval, and `merge` target
+  must be a plain branch name.
+- `RunStore.list_runs()`.
 
 - Level-based `NO-VAGUE-VERIFY` prompt lint, with a test that rejects a
   bad lint by measuring the good config against a corpus of weak prompts.

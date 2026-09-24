@@ -204,6 +204,30 @@ def model_for_attempt(task, attempt):
     return task.model
 
 
+def exit_code_for_statuses(statuses):
+    """Return the exit code for a set of task statuses.
+
+    One implementation, used by both the live ``Orchestrator.run_status()``
+    and the MCP adapter that reads statuses back from the store. The two
+    used to carry separate copies of this rule and drifted: an empty run
+    read as success in the MCP copy while the orchestrator's docstring
+    said it must not.
+
+    * 1 when nothing ran, or an agent failed, timed out, or was skipped;
+    * 2 when any task failed verification (outranks 1);
+    * 0 only when at least one task ran and every task met its bar.
+    """
+    seen = list(statuses)
+    if not seen:
+        return 1
+    if any(status == "verification_failed" for status in seen):
+        return 2
+    unfinished = {
+        "failed", "timed_out", "setup_failed", "skipped", "pending", "running",
+    }
+    return 1 if any(status in unfinished for status in seen) else 0
+
+
 def _new_record():
     return {
         "status": "pending",
@@ -667,7 +691,21 @@ class Orchestrator:
             "tasks": len(self._task_order),
         })
         for tid, record in self._results.items():
-            self._store.upsert_task(self._run_id, tid, record)
+            self._store.upsert_task(self._run_id, tid, self._record_for_store(tid, record))
+
+    def _record_for_store(self, tid, record):
+        """A task record plus the fields the store needs to be useful.
+
+        `workdir` lives on the Task, but anything reading the store back
+        (diff, review, resume diagnostics) needs it on the record. Without
+        this, `oc_fleet_diff` failed on every real run with "no readable
+        workdir", because the field was never written.
+        """
+        stored = dict(record)
+        task = self._tasks.get(tid)
+        if task is not None:
+            stored["workdir"] = task.workdir
+        return stored
 
     def _persist_event(self, task_id, event_type, status, record):
         event = {
@@ -682,7 +720,7 @@ class Orchestrator:
         if self._store is None or self._run_id is None:
             return
         self._store.append_event(self._run_id, event)
-        self._store.upsert_task(self._run_id, task_id, record)
+        self._store.upsert_task(self._run_id, task_id, self._record_for_store(task_id, record))
         if record.get("artifacts") is not None:
             self._store.upsert_artifact(
                 self._run_id, task_id, record["artifacts"]
@@ -1358,16 +1396,9 @@ class Orchestrator:
         """
         if self._preflight_failed:
             return 3
-        saw_agent_failure = False
-        for tid in self._task_order:
-            rec = self._results[tid]
-            status = rec["status"]
-            if status == "verification_failed":
-                return 2
-            if status in ("failed", "timed_out", "setup_failed", "skipped",
-                          "pending", "running"):
-                saw_agent_failure = True
-        return 1 if saw_agent_failure else 0
+        return exit_code_for_statuses(
+            self._results[tid]["status"] for tid in self._task_order
+        )
 
     def summary(self):
         """Return a human readable multi-line status summary."""

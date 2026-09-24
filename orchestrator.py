@@ -462,25 +462,26 @@ class Orchestrator:
     def _is_success(record):
         return record.get("status") in ("succeeded", "verification_passed")
 
-    def _run_hooks(self, commands, workdir, env):
+    def _run_hooks(self, commands, workdir, env, phase="setup"):
         merged = os.environ.copy()
         for key, value in env.items():
             if not isinstance(key, str) or not isinstance(value, str):
-                return "setup failed: environment keys and values must be strings"
+                return "%s failed: environment keys and values must be strings" % phase
             merged[key] = value
         for command in commands:
             try:
                 argv = shell_split(command)
                 if not argv:
-                    return "setup failed: empty hook command"
+                    return "%s failed: empty hook command" % phase
                 completed = subprocess.run(
                     argv, cwd=workdir, env=merged,
                     capture_output=True, text=True, check=False,
                 )
             except (OSError, ValueError) as exc:
-                return "setup failed: %s" % str(exc)[:2000]
+                return "%s failed: %s" % (phase, str(exc)[:2000])
             if completed.returncode:
-                return "setup failed (%s): %s" % (
+                return "%s failed (%s): %s" % (
+                    phase,
                     completed.returncode,
                     (completed.stderr or completed.stdout).strip()[:2000],
                 )
@@ -663,6 +664,11 @@ class Orchestrator:
                     print("verification failed: %s" % tid)
                 return
             rec["status"] = "verification_passed" if verification.required else "succeeded"
+            teardown_error = self._run_hooks(
+                task.teardown, task.workdir, task.env, phase="teardown"
+            )
+            if teardown_error:
+                rec["last_text"] = (rec.get("last_text") or "") + "\n" + teardown_error
             self._persist_event(tid, "task_finished", rec["status"], rec)
             print(
                 "finished: %s (outcome %s, %s)"

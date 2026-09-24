@@ -137,7 +137,7 @@ Because a broken config silently falls back to defaults, a typo does not
 error. To see what is actually in effect, read the loaded config back
 rather than the file on disk.
 
-### v0.1.0 to unreleased
+### v0.1.0 to v0.2.0
 
 No config keys were added, renamed, or removed. An existing config keeps
 working. The run behaviour changes listed in `CHANGELOG.md` under

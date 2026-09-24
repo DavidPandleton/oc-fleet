@@ -9,7 +9,7 @@ covers a change that makes a previously valid run behave differently: a
 task that used to succeed may now be refused at preflight, or a status a
 consumer used to read may be renamed. Those are called out under `Changed`.
 
-## [Unreleased]
+## [0.2.0] - 2026-09-24
 
 ### Added
 
@@ -80,5 +80,6 @@ against independent commands, and records evidence.
 - `oc-fleet-wait.py`, a detached waiter that polls one session and writes
   a result file.
 
-[Unreleased]: https://github.com/DavidPandleton/oc-fleet/compare/v0.1.0...HEAD
+[Unreleased]: https://github.com/DavidPandleton/oc-fleet/compare/v0.2.0...HEAD
+[0.2.0]: https://github.com/DavidPandleton/oc-fleet/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/DavidPandleton/oc-fleet/releases/tag/v0.1.0

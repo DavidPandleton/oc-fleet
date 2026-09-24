@@ -102,6 +102,11 @@ class Task:
     # jalan di qwen3-8-flash-next. Retry buta dengan model yang sama
     # membuang waktu bila errornya berasal dari provider, bukan prompt.
     fallbacks: list[str] = field(default_factory=list)
+    # Bila True, orchestrator membuat git worktree baru dari `repo`
+    # sebelum dispatch pertama dan memakai path itu sebagai workdir,
+    # supaya agent paralel tidak menulis ke direktori yang sama.
+    isolate: bool = False
+    repo: str = ""
 
 
 def model_for_attempt(task, attempt):
@@ -350,6 +355,8 @@ class Orchestrator:
             rec["attempts"] += 1
             if rec["started_at"] is None:
                 rec["started_at"] = time.monotonic()
+            if task.isolate and rec["attempts"] == 1:
+                self._ensure_worktree(task, tid)
             try:
                 session_id = self.fleet.dispatch(
                     task.prompt, task.workdir, title=task.title or tid,
@@ -483,6 +490,19 @@ class Orchestrator:
                 print("failed: %s (%s)" % (tid, reason))
         else:
             print("failed: %s (outcome %s)" % (tid, outcome))
+
+    def _ensure_worktree(self, task, tid):
+        """Buat git worktree untuk task isolasi, arahkan workdir ke sana.
+
+        Gagal = biarkan exception naik supaya run berhenti sebelum
+        dispatch: lebih baik gagal awal yang jelas daripada agent
+        menulis ke workdir yang salah.
+        """
+        import worktree
+
+        root = getattr(self, "worktree_root", None) or "/tmp/oc-fleet-worktrees"
+        task.workdir = worktree.create(task.repo or ".", tid, root=root)
+        print("worktree: %s -> %s" % (tid, task.workdir))
 
     def _cancel_session(self, session_id, tid):
         """Best-effort cancel of a session we are about to abandon.

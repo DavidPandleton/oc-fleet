@@ -1,17 +1,16 @@
+Metadata-Version: 2.4
+Name: oc-fleet
+Version: 0.1.0
+Summary: Fleet manager untuk OpenCode agents via HTTP API
+Requires-Python: >=3.9
+Description-Content-Type: text/markdown
+License-File: LICENSE
+Dynamic: license-file
+
 # oc-fleet
 
 Fleet manager untuk OpenCode agents via HTTP API. Bikin, monitor, dan
-kelola puluhan session paralel dari satu CLI atau DAG orchestrator.
-
-## Install (5 menit)
-
-Prasyarat: `opencode serve --service` jalan.
-
-```bash
-pipx install ~/oss/oc-fleet        # dari lokal
-# atau: pipx install git+https://github.com/DavidPandleton/oc-fleet.git
-oc-fleet stats                      # cek server hidup
-```
+kelola puluhan session paralel dari satu CLI.
 
 ## Quick start
 
@@ -88,39 +87,6 @@ print(o.summary())
 
 DAG topologis, branch independen jalan paralel, retry per task, dependent
 dari task gagal di-skip tanpa bunuh branch lain.
-
-Retry memakai model fallback otomatis: attempt 1 pakai `model`, attempt
-berikutnya pakai `fallbacks` berurutan. Berguna saat error berasal dari
-provider (misal `provider.invalid-request` dengan content kosong), bukan
-dari prompt - retry model sama hanya membuang waktu.
-
-Task paralel di repo yang sama bisa diisolasi via git worktree:
-
-```python
-o.add(Task(id="a", prompt="...", workdir="/repo", repo="/repo",
-           isolate=True))  # workdir diarahkan ke worktree baru otomatis
-```
-
-## Config: model per peran
-
-`~/.config/oc-fleet/config.json` (dibuat otomatis dari default bila tidak
-ada). Contoh:
-
-```json
-{
-  "models": {
-    "scaffold": "cutad/qwen3-8-flash-next",
-    "logic": "cutad/deepseek-v4-pro",
-    "docs": "cutad/glm-5.3-flash",
-    "review": "cutad/qwen3-8-flash-next"
-  },
-  "fallbacks": {
-    "logic": ["cutad/qwen3-8-flash-next"]
-  },
-  "max_parallel": 3,
-  "worktree_root": "/tmp/oc-fleet-worktrees"
-}
-```
 
 ## Library
 

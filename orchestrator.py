@@ -352,6 +352,56 @@ class Orchestrator:
                     ready.append(child)
         return order
 
+    def plan(self):
+        """Build and validate an execution plan without dispatching anything.
+
+        The plan is the preflight contract for a run: graph order, parallel
+        waves, per-task execution settings, and operator-visible risks.
+        """
+        self.validate()
+        order = self.topological_order()
+        levels = {}
+        for tid in order:
+            deps = self._tasks[tid].depends_on
+            levels[tid] = 0 if not deps else max(levels[dep] + 1 for dep in deps)
+        waves = []
+        for tid in order:
+            level = levels[tid]
+            while len(waves) <= level:
+                waves.append([])
+            waves[level].append(tid)
+        tasks = {}
+        risks = []
+        for tid in order:
+            task = self._tasks[tid]
+            tasks[tid] = {
+                "depends_on": list(task.depends_on),
+                "workdir": task.workdir,
+                "model": task.model,
+                "fallbacks": list(task.fallbacks),
+                "retries": task.retries,
+                "timeout": task.timeout,
+                "setup": list(task.setup),
+                "teardown": list(task.teardown),
+                "verification": list(task.verify),
+                "isolate": task.isolate,
+            }
+            if not task.verify:
+                risks.append({"task_id": tid, "kind": "no_verification"})
+            if task.retries and not task.fallbacks:
+                risks.append({"task_id": tid, "kind": "retry_same_model"})
+            if not task.isolate and sum(
+                    1 for other in self._tasks.values()
+                    if other.workdir == task.workdir) > 1:
+                risks.append({"task_id": tid, "kind": "shared_workdir"})
+        return {
+            "order": order,
+            "waves": waves,
+            "max_parallel": self.max_parallel,
+            "tasks": tasks,
+            "risks": risks,
+        }
+
     # -- execution ------------------------------------------------------------
 
     def run(self, dry_run=False):
@@ -360,8 +410,9 @@ class Orchestrator:
         Returns the topological order (dry_run) or the results() dict.
         """
         self.validate()
+        plan = self.plan()
         if dry_run:
-            return self._print_plan()
+            return self._print_plan(plan)
         self._persist_run("running")
         pending = list(self._task_order)
         running = {}
@@ -418,9 +469,17 @@ class Orchestrator:
                 self._run_id, task_id, record["artifacts"]
             )
 
-    def _print_plan(self):
-        order = self.topological_order()
+    def _print_plan(self, plan=None):
+        plan = plan or self.plan()
+        order = plan["order"]
         print("dry run: %d task(s), max_parallel=%d" % (len(order), self.max_parallel))
+        print("waves: %s" % " -> ".join("[" + ", ".join(wave) + "]" for wave in plan["waves"]))
+        if plan["risks"]:
+            print("risks:")
+            for risk in plan["risks"]:
+                print("  %s: %s" % (risk["task_id"], risk["kind"]))
+        else:
+            print("risks: none")
         for index, tid in enumerate(order, 1):
             task = self._tasks[tid]
             deps = ", ".join(task.depends_on) if task.depends_on else "-"

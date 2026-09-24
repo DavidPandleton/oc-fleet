@@ -34,9 +34,13 @@ consumer used to read may be renamed. Those are called out under `Changed`.
 - `CHANGELOG.md` and `MIGRATIONS.md`.
 - `benchmarks/`, a reproducible in-process benchmark with a fixture repo
   and raw JSON results.
+- `run(resume=True)`: a run with a store and a `run_id` adopts tasks a
+  previous run already finished instead of dispatching them again.
 
 ### Changed
 
+- `run()` gained the `resume` keyword. It defaults to `False`, so existing
+  calls behave exactly as before and no run silently changes meaning.
 - Entry points insert their own directory on `sys.path` before importing
   siblings, so `cli.py` and `mcp_server.py` work when launched by `runpy`,
   from a symlink, or by `python3 -m` from another directory, not only via

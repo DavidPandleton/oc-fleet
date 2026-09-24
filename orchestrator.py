@@ -340,6 +340,8 @@ class Orchestrator:
         self._run_id = run_id
         self._event_sink = event_sink
         self._preflight_failed = False
+        # Task ids adopted from the store on a resumed run; never dispatched.
+        self._resumed = set()
         # Tabel harga opsional. Tanpa ini, biaya tetap None dan itu
         # memang jawaban yang benar: model tak dikenal tidak sama dengan
         # biaya nol. Diteruskan apa adanya ke pricing.estimate_cost.
@@ -603,10 +605,16 @@ class Orchestrator:
 
     # -- execution ------------------------------------------------------------
 
-    def run(self, dry_run=False):
+    def run(self, dry_run=False, resume=False):
         """Execute the DAG.
 
         Returns the topological order (dry_run) or the results() dict.
+
+        With ``resume=True`` and a store attached, a task already recorded
+        as finished is adopted instead of dispatched again. Opt-in on
+        purpose: a plain ``run()`` still repeats every task, because
+        silently doing nothing on a second call would be more surprising
+        than repeating work the caller asked to repeat.
         """
         try:
             self.validate()
@@ -619,11 +627,14 @@ class Orchestrator:
             raise
         if dry_run:
             return self._print_plan(plan)
+        if resume:
+            self._apply_resume()
         self._persist_run("running")
         pending = list(self._task_order)
         running = {}
         while pending or running:
             self._skip_blocked(pending)
+            self._skip_resumed(pending)
             self._dispatch_ready(pending, running)
             if not running and pending:
                 # A validated DAG should never reach this state. Do not mark a
@@ -694,6 +705,36 @@ class Orchestrator:
                 % (index, tid, deps, task.model, task.workdir)
             )
         return order
+
+    def _apply_resume(self):
+        """Adopt tasks a previous run already finished.
+
+        Reads task records back from the store and, for any task this run
+        also contains that finished successfully, copies the record into
+        this run so it is never dispatched again. A task left running or
+        pending is ignored: it did not finish, so it runs.
+        """
+        if self._store is None or self._run_id is None:
+            return
+        for tid in self._task_order:
+            try:
+                previous = self._store.get_task(self._run_id, tid)
+            except Exception:
+                # A store that cannot be read must not abort a resume; the
+                # worst case is that we re-run a task, which is the
+                # pre-resume behaviour anyway.
+                continue
+            if not isinstance(previous, dict):
+                continue
+            if previous.get("status") in ("succeeded", "verification_passed"):
+                self._results[tid] = previous
+                self._resumed.add(tid)
+                print("resumed: %s (already %s)" % (tid, previous["status"]))
+
+    def _skip_resumed(self, pending):
+        for tid in list(pending):
+            if tid in self._resumed:
+                pending.remove(tid)
 
     def _skip_blocked(self, pending):
         for tid in list(pending):

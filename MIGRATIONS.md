@@ -78,7 +78,9 @@ it is the one place an upgrade can silently do the wrong thing.
 
 ## Resume semantics
 
-Resume replays a run from its persisted state:
+Resume is opt-in: `run(resume=True)` with a store and a `run_id` attached.
+A plain `run()` ignores the store and repeats every task. Resume replays a
+run from its persisted state:
 
 - A task already `succeeded` or `verification_passed` is not re-dispatched.
 - A task left `running` when the process died is re-run. Its old session

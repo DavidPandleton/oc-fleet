@@ -123,6 +123,29 @@ risks (missing verification, retry with the same model, shared workdir).
 agent, so an invalid dependency, cycle, or empty workdir fails fast.
 ``run(dry_run=True)`` prints the same map.
 
+### A run can resume without redoing finished work
+
+When a run is given a store and a `run_id`, `run(resume=True)` reads the
+previous task records back and adopts any task that already finished, so
+a run interrupted by a process restart picks up where it stopped instead
+of re-dispatching everything:
+
+```python
+from store import RunStore
+from orchestrator import Orchestrator
+
+store = RunStore("~/.local/share/oc-fleet/runs.sqlite")
+orch = Orchestrator(store=store, run_id="nightly")
+orch.add(task)
+orch.run(resume=True)   # a task already `succeeded` is not run again
+```
+
+Resume is opt-in. A plain `run()` still repeats every task, because
+silently doing nothing on a second call would be more surprising than
+repeating work the caller asked to repeat. Resume is also not
+exactly-once: a task that died mid-flight may run its side effect twice,
+so keep tasks idempotent if you intend to resume. See `MIGRATIONS.md`.
+
 ### A run reports whether it actually succeeded
 
 ``run_status()`` condenses the whole run into one exit code a shell script or

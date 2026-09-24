@@ -118,6 +118,36 @@ while `agent_status` keeps the agent's own verdict so neither fact is lost.
 Calling `run_status()` before `run()` returns 1, not 0: a run that produced
 nothing must never look like a success.
 
+### A long run is never silent, and a hung one is named
+
+A run that prints `started: scaffold` and then nothing for eighteen minutes
+is indistinguishable from one that died. The poll loop now emits a heartbeat
+line on an interval, so a run that is merely slow says so:
+
+```
+heartbeat: scaffold (312s running, 1 tool running, oldest 302s)
+```
+
+`Orchestrator(heartbeat_interval=...)` controls the cadence (default 30s);
+`heartbeat_interval=None` silences it.
+
+The "oldest" figure is what turns a heartbeat into a diagnosis. OpenCode can
+leave a tool call in `running` with `executed: false` that never finishes, in
+which case `outcome` stays `None` forever and the run looks busy until the
+task timeout. `Fleet.status()` therefore reports `stuck_seconds` and a `stuck`
+flag when a running tool outlives a threshold. That threshold is a guess
+about legitimate work, so it is configurable rather than baked in:
+
+```python
+Orchestrator(fleet, tool_timeout=1800)  # a run with honestly slow steps
+Orchestrator(fleet, tool_timeout=60)    # a run that should never dawdle
+```
+
+`Fleet.STUCK_AFTER_SECONDS` (300s) remains the default. The threshold is
+threaded through every poll of the run, and the orchestrator checks the
+fleet's signature before passing it, so an older `Fleet.status(session_id)`
+still works unchanged.
+
 ### Verification is about the artifact, not the agent
 
 Verification commands run whenever the agent had a chance to write to the

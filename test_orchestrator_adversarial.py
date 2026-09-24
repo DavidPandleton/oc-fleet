@@ -128,5 +128,69 @@ class TestDispatchFailureReporting(unittest.TestCase):
         self.assertLess(o.results()["t"].get("duration", 0.0), 5.0)
 
 
+class TestStatusTypeErrorIsNotSwallowed(unittest.TestCase):
+    """A TypeError raised INSIDE status() is a poll error, not a cue to retry.
+
+    Threading `tool_timeout` into every poll needs to know whether the
+    fleet accepts `stuck_after`. The tempting implementation is
+
+        try:
+            return fleet.status(sid, stuck_after=T)
+        except TypeError:
+            return fleet.status(sid)
+
+    which is wrong twice over: a TypeError from inside a real status call
+    is indistinguishable from "this fleet is too old", and the fallback
+    call sits inside the handler so its own exceptions bypass the
+    POLL_ERRORS guard. The fix inspects the signature instead. This test
+    pins that behaviour: a status that raises TypeError must still leave
+    the task terminal, not crash the run.
+    """
+
+    class TypeErrorStatusFleet:
+        def __init__(self):
+            self.n = 0
+
+        def dispatch(self, prompt, workdir, title="", model=""):
+            self.n += 1
+            return "s%d" % self.n
+
+        def status(self, sid, stuck_after=None):
+            raise TypeError("boom from inside status")
+
+    def test_inner_type_error_does_not_crash_run(self):
+        o = Orchestrator(
+            fleet=self.TypeErrorStatusFleet(), max_parallel=1,
+            poll_interval=0.01, tool_timeout=5.0,
+        )
+        o.add(Task(id="a", prompt="x", timeout=0.3))
+        try:
+            o.run()
+        except Exception as exc:  # noqa: BLE001
+            self.fail("run() crashed on an inner TypeError: %r" % (exc,))
+        self.assertNotEqual(o.results()["a"]["status"], "running")
+
+    def test_old_fleet_without_stuck_after_still_works(self):
+        """A fleet whose status() takes only session_id must keep polling."""
+
+        class OldFleet:
+            def __init__(self):
+                self.n = 0
+
+            def dispatch(self, prompt, workdir, title="", model=""):
+                self.n += 1
+                return "s%d" % self.n
+
+            def status(self, sid):
+                return {"outcome": "succeeded", "last_assistant_text": "ok"}
+
+        o = Orchestrator(
+            fleet=OldFleet(), max_parallel=1, poll_interval=0.01, tool_timeout=5.0,
+        )
+        o.add(Task(id="a", prompt="x"))
+        o.run()
+        self.assertEqual(o.results()["a"]["status"], "succeeded")
+
+
 if __name__ == "__main__":
     unittest.main()

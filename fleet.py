@@ -205,13 +205,18 @@ class Fleet:
     STUCK_AFTER_SECONDS = 300.0
 
     @staticmethod
-    def _tool_activity(messages, now_ms=None):
+    def _tool_activity(messages, now_ms=None, stuck_after=None):
         """Ringkas keadaan tool call: berapa yang jalan, sejak kapan.
 
         Mengembalikan dict:
             tool_running   - jumlah tool berstatus "running"
             stuck_seconds  - umur tool running paling tua, atau None
-            stuck          - apakah melewati STUCK_AFTER_SECONDS
+            stuck          - apakah melewati ambang macet
+
+        `stuck_after` (detik) menimpa STUCK_AFTER_SECONDS untuk panggilan
+        ini. Tool yang sah-sah saja berjalan lama (install, build, suite
+        tes) berbeda antar task, jadi ambangnya harus bisa diatur pemanggil
+        alih-alih dipaku satu angka global untuk semua run.
         """
         if now_ms is None:
             now_ms = time.time() * 1000
@@ -237,21 +242,26 @@ class Fleet:
                     umur = (now_ms - dibuat) / 1000.0
                     if umur_tertua is None or umur > umur_tertua:
                         umur_tertua = umur
-        macet = umur_tertua is not None and umur_tertua > Fleet.STUCK_AFTER_SECONDS
+        ambang = Fleet.STUCK_AFTER_SECONDS if stuck_after is None else float(stuck_after)
+        macet = umur_tertua is not None and umur_tertua > ambang
         return {
             "tool_running": jumlah,
             "stuck_seconds": umur_tertua,
             "stuck": macet,
         }
 
-    def status(self, session_id):
+    def status(self, session_id, stuck_after=None):
         """Return the outcome, last assistant text, and liveness for a session.
 
         Selain `outcome` dan `last_assistant_text`, hasilnya memuat:
 
             tool_running  - jumlah tool call yang masih berstatus "running"
             stuck_seconds - umur tool running paling tua, dalam detik
-            stuck         - True kalau melewati STUCK_AFTER_SECONDS
+            stuck         - True kalau melewati ambang macet
+
+        `stuck_after` (detik) menimpa STUCK_AFTER_SECONDS untuk panggilan
+        ini, sehingga satu run yang memang punya langkah lambat bisa
+        memakai ambangnya sendiri.
 
         Kenapa perlu: pada sesi nyata di mesin ini, tiga agent berhenti
         dengan tool call berstatus "running" dan `executed: false` yang
@@ -284,7 +294,7 @@ class Fleet:
                 # into both. Doing it here covers every consumer.
                 last_text = self.sanitize(assistant_text)
         hasil = {"outcome": outcome, "last_assistant_text": last_text}
-        hasil.update(self._tool_activity(messages))
+        hasil.update(self._tool_activity(messages, stuck_after=stuck_after))
         # Sesi tanpa satu pun pesan belum pernah diberi prompt. Tanpa
         # penanda ini, `cmd_status` menghitungnya sebagai "aktif" hanya
         # karena `outcome` masih None - sehingga sebuah sesi kosong yang

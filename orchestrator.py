@@ -16,6 +16,7 @@ the runner never blocks forever.
 from __future__ import annotations
 
 import time
+import inspect
 from dataclasses import dataclass, field
 from shlex import split as shell_split
 import os
@@ -118,6 +119,12 @@ DISPATCH_ERRORS = RUN_ERRORS
 # task yang benar-benar bekerja jarang berubah dalam 10 detik, dan
 # deteksi macet tetap menangkap sesi berhenti jauh sebelum deadline.
 POLL_INTERVAL = 10.0
+# Seberapa sering mencetak satu baris progres untuk task yang masih jalan.
+# Nilainya sengaja lebih besar dari POLL_INTERVAL: heartbeat ada untuk
+# memberi tahu bahwa run masih hidup, bukan untuk menambah kebisingan tiap
+# poll. Satu menit cukup untuk membedakan "masih bekerja" dari "menggantung"
+# tanpa membanjiri log run yang panjang.
+HEARTBEAT_INTERVAL = 60.0
 # Batas konkurensi provider cutad. Ditemukan dari pesan 429 di log
 # server: "You already have 15 active request(s); your plan allows 15".
 # Disisakan satu slot supaya panggilan di luar oc-fleet tidak langsung
@@ -306,13 +313,25 @@ class Orchestrator:
                  concurrency_limit=PROVIDER_CONCURRENCY,
                  rate_per_minute=PROVIDER_RATE_PER_MINUTE,
                  burst=PROVIDER_BURST, store=None, run_id=None,
-                 event_sink=None):
+                 event_sink=None, heartbeat_interval=HEARTBEAT_INTERVAL,
+                 tool_timeout=None):
         if fleet is None:
             fleet = Fleet()
         if int(max_parallel) < 1:
             raise ValueError("max_parallel must be >= 1, got %r" % (max_parallel,))
         self.max_parallel = int(max_parallel)
         self.poll_interval = poll_interval
+        self.heartbeat_interval = heartbeat_interval
+        # Ambang macet per-tool untuk seluruh run. None = pakai default
+        # Fleet.STUCK_AFTER_SECONDS. Task yang memang punya langkah lambat
+        # bisa menaikkannya, task yang seharusnya cepat bisa menurunkannya.
+        self.tool_timeout = None if tool_timeout is None else float(tool_timeout)
+        # Cache hasil introspeksi dukungan `stuck_after` pada fleet ini.
+        self._status_accepts_stuck = None
+        # Lewat lambda supaya test yang mem-patch time.monotonic (pola lama)
+        # tetap berlaku, dan test yang mengganti orch._clock langsung juga
+        # bisa. Menugaskan `time.monotonic` mentah membekukan referensi lama.
+        self._clock = lambda: time.monotonic()
         self._tasks = {}
         self._task_order = []
         self._results = {}
@@ -557,7 +576,7 @@ class Orchestrator:
                 # up to 3s - a 3x error on the deadline the caller asked for.
                 sleep_for = self.poll_interval
                 nearest = min(info["deadline"] for info in running.values())
-                remaining = nearest - time.monotonic()
+                remaining = nearest - self._clock()
                 if remaining < sleep_for:
                     sleep_for = max(remaining, 0.0)
                 if sleep_for:
@@ -731,10 +750,38 @@ class Orchestrator:
             rec["session_id"] = session_id
             running[tid] = {
                 "session_id": session_id,
-                "deadline": time.monotonic() + max(float(task.timeout), 0.0),
+                "deadline": self._clock() + max(float(task.timeout), 0.0),
+                "started_at": self._clock(),
+                "last_heartbeat": self._clock(),
                 "last_state": {"outcome": None, "last_assistant_text": None},
             }
             print("started: %s (attempt %d, session %s)" % (tid, rec["attempts"], session_id or "-"))
+
+    def _supports_stuck_after(self):
+        """Apakah fleet ini menerima `stuck_after`? Dihitung sekali saja.
+
+        Versi lama `Fleet.status` hanya punya `session_id`, dan test double
+        lazim mengikuti bentuk itu. Menebak lewat `except TypeError` salah:
+        TypeError yang berasal dari DALAM status juga akan tertangkap dan
+        ditelan, sehingga poll yang gagal tampak seperti poll biasa. Jadi
+        kita periksa tanda tangan fungsi secara eksplisit.
+        """
+        if self._status_accepts_stuck is None:
+            try:
+                params = inspect.signature(self.fleet.status).parameters
+            except (TypeError, ValueError):
+                params = {}
+            self._status_accepts_stuck = (
+                "stuck_after" in params
+                or any(p.kind == p.VAR_KEYWORD for p in params.values())
+            )
+        return self._status_accepts_stuck
+
+    def _call_status(self, session_id):
+        """Panggil fleet.status, setel ambang macet hanya bila didukung."""
+        if self.tool_timeout is not None and self._supports_stuck_after():
+            return self.fleet.status(session_id, stuck_after=self.tool_timeout)
+        return self.fleet.status(session_id)
 
     def _poll_running(self, pending, running):
         for tid in list(running):
@@ -746,7 +793,7 @@ class Orchestrator:
                 self._finish_attempt(tid, info["last_state"], pending)
                 continue
             try:
-                state = self.fleet.status(session_id)
+                state = self._call_status(session_id)
             except POLL_ERRORS as exc:
                 # A bad poll is a poll failure, not a task failure: keep the
                 # last known state and let the deadline decide. Never let it
@@ -756,9 +803,10 @@ class Orchestrator:
                     info["last_state"].get("last_assistant_text")
                     or "poll failed: %s" % exc
                 )
-                if time.monotonic() >= info["deadline"]:
+                if self._clock() >= info["deadline"]:
                     self._finish_attempt(tid, info["last_state"], pending, timed_out=True)
                 else:
+                    self._maybe_heartbeat(tid, info)
                     running[tid] = info
                 continue
             if not isinstance(state, dict):
@@ -804,11 +852,45 @@ class Orchestrator:
                 print("stuck: %s (%s)" % (tid, detail))
                 self._finish_attempt(tid, state, pending, timed_out=True)
                 continue
-            if time.monotonic() >= info["deadline"]:
+            if self._clock() >= info["deadline"]:
                 # Deadline expired with no outcome: only NOW is it a timeout.
                 self._finish_attempt(tid, state, pending, timed_out=True)
                 continue
+            self._maybe_heartbeat(tid, info)
             running[tid] = info
+
+    def _maybe_heartbeat(self, tid, info):
+        """Cetak satu baris progres untuk task yang lama berjalan.
+
+        Murni observability: tidak mengubah alur, tidak menyentuh hasil.
+        Berguna persis pada kasus yang memicunya - run coffee-catalog yang
+        diam 18 menit antara "started" dan verdict akhir. Tanpa baris ini,
+        run yang sehat dan run yang menggantung terlihat sama dari luar.
+        """
+        if self.heartbeat_interval is None:
+            return
+        now = self._clock()
+        # Toleran terhadap info yang dibuat sebelum heartbeat ada (mis. di
+        # test yang menyuntik `running` langsung). Fallback ke sekarang =
+        # tidak ada heartbeat sampai interval berikutnya.
+        last = info.get("last_heartbeat")
+        if last is None:
+            info["last_heartbeat"] = now
+            last = now
+        if now - last < self.heartbeat_interval:
+            return
+        info["last_heartbeat"] = now
+        elapsed = now - info.get("started_at", now)
+        state = info.get("last_state") or {}
+        running = state.get("tool_running")
+        detail = ""
+        if isinstance(running, int) and running > 0:
+            oldest = state.get("stuck_seconds")
+            if isinstance(oldest, (int, float)):
+                detail = ", %d tool berjalan (paling tua %.0f detik)" % (running, oldest)
+            else:
+                detail = ", %d tool berjalan" % running
+        print("heartbeat: %s (%s berjalan%s)" % (tid, self._fmt_duration(elapsed), detail))
 
     def _finish_attempt(self, tid, state, pending, timed_out=False):
         task = self._tasks[tid]

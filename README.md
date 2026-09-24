@@ -336,6 +336,19 @@ password is discovered in this order: `OPENCODE_SERVER_PASSWORD`,
 `/tmp/oc_serve.log`, `~/.local/share/opencode/serve.log`, and finally
 `~/.config/opencode/service.json`.
 
+## Compatibility and upgrades
+
+Two documents cover what stays stable across versions:
+
+- [`CHANGELOG.md`](CHANGELOG.md) records every change, with the run
+  behaviour changes called out separately from the additions.
+- [`MIGRATIONS.md`](MIGRATIONS.md) documents the status vocabulary, the
+  exit-code contract, the SQLite store location, resume semantics (and
+  why a resumed side effect can run twice), verifier security, the
+  approval and merge boundary, config migration, and rollback.
+
+Read `MIGRATIONS.md` before upgrading a run that is in flight.
+
 ## Performance notes
 
 oc-fleet was built and debugged entirely through OpenCode's HTTP API. It
